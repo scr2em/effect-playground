@@ -1,0 +1,14 @@
+{
+  "name": "effect-playground",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "bun run server.ts",
+    "verify": "bun run scripts/verify.ts"
+  },
+  "dependencies": {
+    "@types/bun": "^1.4.1",
+    "effect": "4.0.0-rc.112",
+    "typescript": "5"
+  }
+}
