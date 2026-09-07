@@ -454,7 +454,7 @@ consumer got 1,2,3,4,5`,
     },
     {
       id: "concurrency-l8",
-      title: "PubSub and Semaphore, and which primitive to reach for",
+      title: "PubSub and Semaphore, and which primitive to use",
       explain: `
 2 more primitives complete the set.
 
@@ -514,6 +514,68 @@ mailer saw order:created order:paid
 select 1 ok | select 2 ok | select 3 ok | select 4 ok | select 5 ok
 max concurrent queries: 2`,
       after: `The \`Effect.all\` call is unbounded, but only 2 queries run at once. The limit lives with the resource. A second, unrelated \`Effect.all\` elsewhere that also calls \`query\` shares the same 2 permits. Try \`Semaphore.make(1)\` to run every query 1 at a time.`
+    },
+    {
+      id: "concurrency-l9",
+      title: "Semaphore in depth: mutex, weighted permits, skip when busy",
+      explain: `
+A \`Semaphore\` has 3 more uses that the last lesson did not show.
+
+**1. A mutex.** A semaphore with 1 permit is a lock. Only 1 fiber at a time can run the code inside \`withPermits\`. Use it when you must read a value, wait, and write it back, and the value lives outside a \`Ref\`. Examples are a file, a plain variable from old code, or a client library that is not safe for concurrent calls.
+
+**2. Weighted permits.** A fiber can take more than 1 permit. A job that costs 3 permits waits until 3 permits are free at the same time. This lets a large job and small jobs share 1 pool. The runtime gives the permits back when the job ends, also on failure or interrupt.
+
+**3. Skip when busy.** \`withPermitsIfAvailable\` does not wait. If the permits are free, it runs the effect and returns \`Option.some(result)\`. If they are not free, it returns \`Option.none()\` at once. Use it for work that must not pile up, for example a metric flush or a cache refresh that is already in progress.
+
+| Call | Waits? | Result type | Use it when |
+|---|---|---|---|
+| \`withPermits(sem, n)(effect)\` | Yes | \`A\` | The work must run, and it must wait its turn |
+| \`withPermitsIfAvailable(sem, n)(effect)\` | No | \`Option<A>\` | The work is optional if another fiber already does it |
+| \`take(sem, n)\` and \`release(sem, n)\` | Yes | \`number\` | Manual control. Caution: a failure between the 2 calls keeps the permit |
+`,
+      code: `import { Effect, Option, Ref, Semaphore } from "effect"
+
+const program = Effect.gen(function* () {
+  // 1. Mutex: 1 permit protects a read-wait-write on a plain variable
+  let balance = 100
+  const lock = yield* Semaphore.make(1)
+  const withdraw = (amount: number) =>
+    Semaphore.withPermits(lock, 1)(Effect.gen(function* () {
+      const current = balance
+      yield* Effect.sleep("1 millis")       // without the lock, other fibers run here
+      balance = current - amount
+    }))
+  yield* Effect.forEach([10, 20, 30], withdraw, { concurrency: "unbounded", discard: true })
+  console.log("balance:", balance)          // 40. Without the lock: 90, 80, or 70
+
+  // 2. Weighted permits: "big" needs 3 of 4 slots, so it waits for "small-a" to end
+  const slots = yield* Semaphore.make(4)
+  const order = yield* Ref.make<Array<string>>([])
+  const job = (name: string, cost: number, ms: number) =>
+    Semaphore.withPermits(slots, cost)(
+      Effect.sleep(ms).pipe(Effect.andThen(Ref.update(order, (xs) => [...xs, name])))
+    )
+  yield* Effect.all(
+    [job("small-a", 1, 5), job("small-b", 1, 25), job("big", 3, 1)],
+    { concurrency: "unbounded" }
+  )
+  console.log("finish order:", (yield* Ref.get(order)).join(", "))
+
+  // 3. Skip when busy: the second flush finds no permit and returns none at once
+  const flushLock = yield* Semaphore.make(1)
+  const flush = Semaphore.withPermitsIfAvailable(flushLock, 1)(
+    Effect.sleep("5 millis").pipe(Effect.as("flushed"))
+  )
+  const [first, second] = yield* Effect.all([flush, flush], { concurrency: "unbounded" })
+  console.log("first:", Option.getOrElse(first, () => "skipped"), "| second:", Option.getOrElse(second, () => "skipped"))
+})
+
+Effect.runPromise(program)
+`,
+      expectedOutput: `balance: 40
+finish order: small-a, big, small-b
+first: flushed | second: skipped`,
+      after: `Notice that "big" ends before "small-b" although "big" started last. It waited only until 3 permits were free, not until the pool was empty. Try to change the cost of "big" to 4. Now it must wait for both small jobs, and the order changes. Then remove the lock in part 1: the balance is wrong because the 3 fibers read 100 at the same time.`
     }
   ],
   dosAndDonts: [
@@ -927,6 +989,61 @@ heartbeat stopped`,
         "Wrap the program: Effect.runPromise(Effect.scoped(program))."
       ],
       explanation: `\`Effect.forkScoped\` ties the fiber to the nearest \`Scope\`, so its type becomes \`Effect<void, never, Scope>\`. \`runPromise\` only accepts effects with requirements of \`never\`. The compiler stopped you from a run of an effect whose cleanup had no place to go. \`Effect.scoped\` creates a scope, runs the program inside it, and closes the scope on exit. When the scope closes, the runtime interrupts the heartbeat, and the heartbeat runs its finalizer. The type system turned "who stops the heartbeat?" into a question that you must answer before the program can run.`
+    },
+    {
+      id: "concurrency-c9",
+      title: "The permit that never comes back",
+      task: `The first call fails on purpose. After that, the second call never gets a permit and the program prints \`hung\`. Change how the semaphore is used so a failure gives the permit back, and the program prints \`done\` for the second call.`,
+      code: `import { Effect, Option, Result, Semaphore } from "effect"
+
+const program = Effect.gen(function* () {
+  const lock = yield* Semaphore.make(1)
+
+  const risky = (fail: boolean) =>
+    Effect.gen(function* () {
+      yield* Semaphore.take(lock, 1)
+      if (fail) yield* Effect.fail("boom")
+      yield* Semaphore.release(lock, 1)
+      return "done"
+    })
+
+  const first = yield* Effect.result(risky(true))
+  console.log("first:", Result.isFailure(first) ? "failed" : "ok")
+
+  const second = yield* risky(false).pipe(Effect.timeoutOption("50 millis"))
+  console.log("second:", Option.isSome(second) ? second.value : "hung")
+})
+
+Effect.runPromise(program)
+`,
+      solution: `import { Effect, Option, Result, Semaphore } from "effect"
+
+const program = Effect.gen(function* () {
+  const lock = yield* Semaphore.make(1)
+
+  const risky = (fail: boolean) =>
+    Semaphore.withPermits(lock, 1)(Effect.gen(function* () {
+      if (fail) yield* Effect.fail("boom")
+      return "done"
+    }))
+
+  const first = yield* Effect.result(risky(true))
+  console.log("first:", Result.isFailure(first) ? "failed" : "ok")
+
+  const second = yield* risky(false).pipe(Effect.timeoutOption("50 millis"))
+  console.log("second:", Option.isSome(second) ? second.value : "hung")
+})
+
+Effect.runPromise(program)
+`,
+      expectedOutput: `first: failed
+second: done`,
+      hints: [
+        "Follow the permit in the failing call. Which line runs after Effect.fail? None.",
+        "Manual take and release is not safe when the code between them can fail or be interrupted.",
+        "Wrap the body in Semaphore.withPermits(lock, 1)(...) and remove take and release."
+      ],
+      explanation: `\`Effect.fail\` stops the generator at once, so the \`release\` line never runs and the only permit stays taken. Every later caller waits forever. \`withPermits\` acquires the permit, runs the effect, and gives the permit back in a finalizer. The finalizer runs on success, on failure, and on interrupt. This is the same rule as \`acquireRelease\` in Resource Management: put the release next to the acquire, and let the runtime run it.`
     }
   ],
   problems: [
