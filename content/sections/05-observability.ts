@@ -4,52 +4,52 @@ const section: Section = {
   id: "observability",
   title: "Observability",
   order: 5,
-  summary: "Logs, spans, and metrics as effects that carry their context with them.",
+  summary: "Logs, spans, and metrics are effects. They carry their context with them.",
   intro: `
-**The problem.** Production code needs to answer "what happened?" after the fact. In plain TypeScript that turns into \`console.log\` sprinkled through every function, each line hand-assembling its own context:
+**The problem.** After an incident, you must find out what happened. In plain TypeScript, the answer is \`console.log\` in every function. Each line builds its own context by hand:
 
 \`\`\`ts
 async function chargeCard(order: Order) {
-  console.log(\`[\${new Date().toISOString()}] [INFO] charging order \${order.id} for user \${order.userId}\`)
+  console.log(\`[\${new Date().toISOString()}] [INFO] charge order \${order.id} for user \${order.userId}\`)
   const result = await gateway.charge(order)
   console.log(\`[\${new Date().toISOString()}] [INFO] charged order \${order.id} for user \${order.userId} in \${Date.now() - start}ms\`)
 }
 \`\`\`
 
-Every line repeats the order id and user id. Forget one and that log line is useless when you grep for the order. Timing is done with \`Date.now()\` by hand. And when the team later "adds observability", tracing and metrics are bolted on with a global APM agent that has no idea which request a given function call belongs to, because that context lives in closures and local variables the agent cannot see.
+Every line repeats the order id and the user id. If you forget one, that line is useless when you search for the order. You measure time with \`Date.now()\` by hand. Later, the team adds a global APM agent. The agent does not know which request a function call belongs to. That context is in local variables, and the agent cannot see it.
 
 ### The shift
 
-Today you think of logging as **printing strings from inside a function**. Effect asks you to think of a log line, a span, and a metric update as **effects that run inside a fiber**, and the fiber carries context with it. When you write \`Effect.annotateLogs(handler, { requestId })\`, every log line inside \`handler\`, at any depth, gets \`requestId\` attached without you passing it around. When you wrap an effect in \`Effect.withSpan("charge")\`, every span created inside it becomes a child, so the trace tree mirrors your call tree.
+Today you think of a log line as text that a function prints. In Effect, a log line, a span, and a metric update are effects. They run inside a fiber. A fiber is the unit that runs an effect, and it carries context with it. When you write \`Effect.annotateLogs(handler, { requestId })\`, every log line inside \`handler\` gets \`requestId\`. This includes log lines in functions that \`handler\` calls. You do not pass the id around. When you put an effect inside \`Effect.withSpan("charge")\`, every span inside it becomes a child span. The trace tree is the same as the call tree.
 
-The logger, the tracer, and the metric registry are all services. That is the payoff: swap the logger for a JSON logger in production, a silent one in tests, or a plain one in this playground, without touching a single \`Effect.log\` call. Export spans to OpenTelemetry by providing one layer at the edge of the app.
+The logger, the tracer, and the metric registry are services. This is the benefit: you can change the logger to a JSON logger in production, to a silent logger in tests, or to a plain logger in this playground. You do not change one \`Effect.log\` call. To export spans to OpenTelemetry, you provide one layer at the edge of the app.
 
-| Concern | Plain TypeScript | Effect |
+| Task | Plain TypeScript | Effect |
 |---|---|---|
-| Log a line | \`console.log("...")\` with manual formatting | \`Effect.logInfo("...")\`, format decided by the \`Logger\` service |
-| Attach context | Pass ids into every function and interpolate them | \`Effect.annotateLogs\` once, inherited by everything inside |
-| Time an operation | \`Date.now()\` before and after | \`Effect.withSpan("name")\`, nested automatically |
-| Count things | A module-level \`let count = 0\` | \`Metric.counter("name")\`, read with \`Metric.value\` |
-| Change the backend | Rewrite call sites | Provide a different layer |
+| Write a log line | \`console.log("...")\` with manual format | \`Effect.logInfo("...")\`, the \`Logger\` service sets the format |
+| Add context | Pass ids into every function | \`Effect.annotateLogs\` one time, all inner code gets it |
+| Measure an operation | \`Date.now()\` before and after | \`Effect.withSpan("name")\`, child spans are automatic |
+| Count events | A module-level \`let count = 0\` | \`Metric.counter("name")\`, read it with \`Metric.value\` |
+| Change the backend | Change every call site | Provide a different layer |
 
-One practical note for this playground: the default logger prints a timestamp and a fiber id on every line, so its output changes on every run. The first lesson builds a small deterministic logger and uses it everywhere after that. That is also the first real lesson: the logger is a service you own.
+Note: the default logger prints a timestamp and a fiber id on every line. This output changes on every run. Lesson 1 builds a small logger with stable output, and all other lessons use it. That is also the first lesson: the logger is a service that you own.
 `,
   lessons: [
     {
       id: "observability-l1",
-      title: "Replacing the logger",
+      title: "Replace the logger",
       explain: `
-\`Effect.log\` and its siblings do not print anything themselves. They send a log event to whatever \`Logger\` services are currently installed. The default logger prints a line like this:
+\`Effect.log\` and the related functions do not print. They send a log event to the \`Logger\` services that are installed. The default logger prints a line like this:
 
 \`\`\`
 [13:42:07.118] INFO (#12): starting v1
 \`\`\`
 
-That timestamp and fiber number make output impossible to compare in a test or in this playground. So the very first thing to learn is that the logger is replaceable.
+The timestamp and the fiber number change on every run. You cannot compare this output in a test or in this playground. The first thing to learn is that you can replace the logger.
 
-\`Logger.make\` takes a function that receives the log event: the \`message\` (an array, because \`Effect.log("a", 1)\` accepts several values), the \`logLevel\`, the \`fiber\`, a \`cause\`, and a \`date\`. Our logger builds a short string and prints it with \`console.log\`.
+\`Logger.make\` takes a function. The function gets the log event. The event has a \`message\` (an array, because \`Effect.log("a", 1)\` accepts more than 1 value), a \`logLevel\`, the \`fiber\`, a \`cause\`, and a \`date\`. Our logger builds a short string and prints it with \`console.log\`.
 
-\`Logger.layer([plain])\` is a layer that **replaces** the current set of loggers with the ones you list. Provide it around the program and every \`Effect.log\` inside now goes to \`plain\` only. Nothing inside the program changed.
+\`Logger.layer([plain])\` is a layer. It replaces the current set of loggers with the loggers in the list. Provide it around the program. Every \`Effect.log\` inside the program now goes to \`plain\` only. The program did not change.
 `,
       code: `import { Effect, Logger } from "effect"
 
@@ -74,13 +74,13 @@ Effect.runSync(program.pipe(Effect.provide(Logger.layer([plain]))))
 [Info] loaded 3 users
 [Warn] cache miss
 [Error] payment declined`,
-      after: `Remove the \`Effect.provide(Logger.layer([plain]))\` line and run again. The same four lines appear, but from the default logger, with timestamps. Add \`{ mergeWithExisting: true }\` as a second argument to \`Logger.layer\` and you get both. The program never changed, only the service.`
+      after: `Remove the line \`Effect.provide(Logger.layer([plain]))\` and run again. The same 4 lines appear, but the default logger prints them with timestamps. Add \`{ mergeWithExisting: true }\` as the second argument of \`Logger.layer\`. Now both loggers print. The program did not change. Only the service changed.`
     },
     {
       id: "observability-l2",
       title: "Log levels and the minimum level",
       explain: `
-Every log call has a level. From most to least severe:
+Every log call has a level. This table lists the levels from the most severe to the least severe:
 
 | Function | Level | Shown by default? |
 |---|---|---|
@@ -91,9 +91,9 @@ Every log call has a level. From most to least severe:
 | \`Effect.logDebug\` | Debug | no |
 | \`Effect.logTrace\` | Trace | no |
 
-The cut-off is a fiber-local setting called \`References.MinimumLogLevel\`. Its default is \`"Info"\`, which is why debug lines vanish. In Effect v4 this kind of setting is a \`Context.Reference\`: a service with a default value, which you override for a region of the program with \`Effect.provideService\` (or with \`Layer.succeed\` when building layers).
+The limit is a fiber-local value with the name \`References.MinimumLogLevel\`. The default is \`"Info"\`. This is why debug lines do not appear. In Effect v4, a value of this type is a \`Context.Reference\`. A reference is a service with a default value. You change it for one part of the program with \`Effect.provideService\`. In a layer, you use \`Layer.succeed\`.
 
-The filter is applied before the logger is called, so a filtered line costs almost nothing. This is how you keep \`logDebug\` calls in the code and turn them on only when you need them.
+The filter runs before the logger. A filtered line has almost no cost. You can keep \`logDebug\` calls in the code and turn them on only when you need them.
 `,
       code: `import { Effect, Logger, References } from "effect"
 
@@ -130,17 +130,17 @@ runAt("Warn")   // only Warn and above
 [Warn] slow query
 -- minimum Warn
 [Warn] slow query`,
-      after: `The v3 name for this was \`Logger.withMinimumLogLevel\`. In v4 the setting is a plain reference, which means you can also read it: \`const level = yield* References.MinimumLogLevel\`. Try adding that line to \`work\` and printing it.`
+      after: `In v3, the name of this function was \`Logger.withMinimumLogLevel\`. In v4, the minimum level is a reference. You can also read it: \`const level = yield* References.MinimumLogLevel\`. Add this line to \`work\` and print the level.`
     },
     {
       id: "observability-l3",
       title: "Annotations travel with the fiber",
       explain: `
-The plain TypeScript way to get a request id into every log line is to pass it into every function. The Effect way is \`Effect.annotateLogs\`. It attaches key/value pairs to a region of the program, and every log event inside that region, however deep the call, sees them.
+In plain TypeScript, you pass a request id into every function to get it into every log line. In Effect, you use \`Effect.annotateLogs\`. It attaches key/value pairs to one part of the program. Every log event inside that part gets the pairs. The depth of the call does not matter.
 
-Annotations live in another reference, \`References.CurrentLogAnnotations\`. Our logger reads it from the fiber that emitted the event with \`fiber.getRef(...)\`. Real loggers such as the JSON logger print them as fields, which is what makes structured logging searchable.
+The annotations are in a reference with the name \`References.CurrentLogAnnotations\`. Our logger reads the annotations from the fiber that sent the event, with \`fiber.getRef(...)\`. A production logger, for example the JSON logger, prints the annotations as fields. This is what makes structured logs searchable.
 
-Nested \`annotateLogs\` calls merge: the inner region sees the outer keys plus its own. When the region ends, the annotations are gone. Nothing leaks to the next request.
+Nested \`annotateLogs\` calls merge. The inner part sees the outer keys and its own keys. When the part ends, the annotations are removed. Nothing goes to the next request.
 `,
       code: `import { Effect, Logger, References } from "effect"
 
@@ -179,17 +179,17 @@ Effect.runSync(program.pipe(Effect.provide(Logger.layer([plain]))))
 [Info] request received requestId=r-2
 [Info] loading cart requestId=r-2 userId=lin
 [Info] done with 2 items requestId=r-2`,
-      after: `Notice "done with 2 items" does not carry \`userId\`: that annotation belonged to the \`loadCart\` region, which has ended. If you need an annotation to last until the end of the surrounding scope instead of a single effect, \`Effect.annotateLogsScoped\` does that.`
+      after: `Note: the line "done with 2 items" does not have \`userId\`. That annotation belonged to the \`loadCart\` part, and that part has ended. If an annotation must stay until the end of the current scope, use \`Effect.annotateLogsScoped\`.`
     },
     {
       id: "observability-l4",
-      title: "Log spans: how long has this been going on?",
+      title: "Log spans: how long has this part run?",
       explain: `
-\`Effect.withLogSpan(effect, "label")\` marks a region with a label and a start time. Every log line inside then reports how long the region has been running, which is the cheap way to spot slow steps without a full tracing setup. A real logger prints it as \`label=12ms\`.
+\`Effect.withLogSpan(effect, "label")\` marks a part of the program with a label and a start time. Every log line inside that part shows how long the part has run. This is a cheap way to find slow steps without a full trace setup. A production logger prints it as \`label=12ms\`.
 
-We cannot show real milliseconds here, so our logger prints only the labels. They are stored in \`References.CurrentLogSpans\` as \`[label, startTime]\` pairs, newest first, so we reverse them to read outer to inner.
+We cannot show real milliseconds here. Our logger prints only the labels. The labels are in \`References.CurrentLogSpans\` as \`[label, startTime]\` pairs, newest first. We reverse the list to read from outer to inner.
 
-Compare this with lesson 3: annotations are values you attach, log spans are timers you start. Both travel with the fiber and both disappear when their region ends. The next lesson covers real tracing spans, which are the same idea for a tracer instead of a logger.
+Compare this with lesson 3. Annotations are values that you attach. Log spans are timers that you start. Both travel with the fiber, and both are removed when their part ends. Lesson 5 covers trace spans. A trace span is the same idea, but for a tracer instead of a logger.
 `,
       code: `import { Effect, Logger, References } from "effect"
 
@@ -219,17 +219,17 @@ Effect.runSync(program.pipe(Effect.provide(Logger.layer([plain]))))
 start  spans: request
 running query  spans: request > db
 respond  spans: request`,
-      after: `Swap \`plain\` for \`Logger.consoleLogFmt\` (one of the built-in loggers) and look at the output: you will see \`request=3ms db=1ms\` style fields with real durations, plus a timestamp, which is why it is not used for the expected output here.`
+      after: `Replace \`plain\` with \`Logger.consoleLogFmt\`, one of the built-in loggers, and look at the output. You see fields like \`request=3ms db=1ms\` with real durations, and a timestamp. This is why the expected output does not use it.`
     },
     {
       id: "observability-l5",
-      title: "Tracing spans nest like your calls",
+      title: "Trace spans nest like your calls",
       explain: `
-A **span** is a named, timed unit of work in a trace. \`Effect.withSpan(effect, "name")\` creates one around an effect and ends it when the effect finishes, whether it succeeded, failed, or was interrupted. Any span created inside becomes a **child** of it, because the current span is carried by the fiber. That is how a trace viewer can show \`checkout > charge > gateway\` as a tree without you wiring parent ids by hand.
+A **span** is a unit of work in a trace. It has a name, a start time, and an end time. \`Effect.withSpan(effect, "name")\` makes a span around an effect. The span ends when the effect ends. This is true when the effect succeeds, fails, or is interrupted. Every span made inside becomes a **child** of it, because the fiber carries the current span. A trace viewer can show \`checkout > charge > gateway\` as a tree, and you do not connect parent ids by hand.
 
-Spans carry **attributes**. You can set them when creating the span (\`{ attributes: { ... } }\`), or later from inside with \`Effect.annotateCurrentSpan\`.
+A span has **attributes**. You can set them when you make the span, with \`{ attributes: { ... } }\`. You can also set them later from inside the span, with \`Effect.annotateCurrentSpan\`.
 
-\`Effect.currentSpan\` gives you the active span. We use it here to print the span's name, its parent's name, and its attributes, which is deterministic. In a real app you would not read spans yourself; you would provide a tracer layer (for example the OTLP tracer from \`effect/unstable/observability\`) and every span is exported automatically. Note that \`currentSpan\` fails with \`NoSuchElementError\` when no span is active, so its error type is not \`never\`.
+\`Effect.currentSpan\` gives the active span. We use it to print the name of the span, the name of its parent, and its attributes. This output is stable. In a real app you do not read spans yourself. You provide a tracer layer, for example the OTLP tracer from \`effect/unstable/observability\`, and every span is exported. Note: \`currentSpan\` fails with \`NoSuchElementError\` when no span is active. Its error type is not \`never\`.
 `,
       code: `import { Effect, Option } from "effect"
 
@@ -260,24 +260,24 @@ Effect.runSync(checkout)
       expectedOutput: `checkout  parent=none  attrs={"orderId":"o-1"}
 charge  parent=checkout  attrs={"gateway":"acme","amount":42}
 checkout  parent=none  attrs={"orderId":"o-1"}`,
-      after: `\`Effect.fn("name")\` is a shortcut that wraps a function body in a span named after the function, which is the usual way to trace service methods. Try replacing the \`checkout\` definition with \`Effect.fn("checkout")(function* () { ... })\` and calling \`checkout()\`.`
+      after: `\`Effect.fn("name")\` is a short form. It puts the body of a function inside a span with the name of the function. This is the usual way to trace service methods. Replace the \`checkout\` definition with \`Effect.fn("checkout")(function* () { ... })\` and call \`checkout()\`.`
     },
     {
       id: "observability-l6",
       title: "Metrics: counter, gauge, histogram",
       explain: `
-Logs tell you what happened once. Metrics tell you how often and how much, cheaply, over time. Effect has a small family:
+A log tells you what happened one time. A metric tells you how often and how much, at low cost, over time. Effect has a small set of metric types:
 
-| Metric | Records | \`update\` does | Use when |
+| Metric | Records | \`update\` does | Use it for |
 |---|---|---|---|
-| \`Metric.counter\` | A running total | Adds the input | Requests served, errors seen |
-| \`Metric.gauge\` | One current value | Replaces the value (\`modify\` adds) | Queue length, memory in use |
-| \`Metric.histogram\` | A distribution in buckets | Records one observation | Latency, payload size |
-| \`Metric.frequency\` | Counts per string | Increments that string | Status codes, error tags |
+| \`Metric.counter\` | A total | Adds the input | Requests served, errors seen |
+| \`Metric.gauge\` | 1 current value | Replaces the value (\`modify\` adds) | Queue length, memory in use |
+| \`Metric.histogram\` | A distribution in buckets | Records 1 observation | Latency, payload size |
+| \`Metric.frequency\` | A count for each string | Adds 1 to that string | Status codes, error tags |
 
-A metric is created with a name (and optional description, attributes). \`Metric.update(metric, value)\` records into it. \`Metric.value(metric)\` reads the current state, which is what we print. Metrics are registered in a \`Metric.MetricRegistry\` reference, so an exporter layer can find all of them by name.
+You make a metric with a name. A description and attributes are optional. \`Metric.update(metric, value)\` records a value. \`Metric.value(metric)\` reads the current state, and we print that state. Metrics are registered in the \`Metric.MetricRegistry\` reference. An exporter layer can find all of them by name.
 
-For a histogram the state has \`count\`, \`min\`, \`max\`, \`sum\`, and \`buckets\`: for each upper bound you gave, how many observations were at or below it.
+The state of a histogram has \`count\`, \`min\`, \`max\`, \`sum\`, and \`buckets\`. For each upper limit that you gave, a bucket holds the number of observations that are equal to or below that limit.
 `,
       code: `import { Effect, Metric } from "effect"
 
@@ -311,14 +311,51 @@ Effect.runSync(program)
 queue: 5
 latency count 4 min 5 max 300 sum 410
 buckets [[10,1],[50,2],[100,3]]`,
-      after: `The bucket counts are cumulative: 30 ms is at or below 50, and also at or below 100. The 300 ms observation is above every bound, so it only shows in \`count\` and \`sum\`. Try \`yield* Metric.dump\` and print the result: it renders every registered metric as a table.`
+      after: `The bucket counts are cumulative. The value 30 ms is at or below 50, and also at or below 100. The value 300 ms is above every limit, so it appears only in \`count\` and \`sum\`. Add \`yield* Metric.dump\` and print the result. It shows every registered metric as a table.`
+    }
+  ],
+  dosAndDonts: [
+    {
+      do: "Provide `Logger.layer([...])` 1 time, at the edge of the app.",
+      dont: "Do not format log lines by hand with `console.log` inside effects.",
+      why: "A hand-made line has no level, no annotations, and no span, and you cannot change its destination without a change to the code."
+    },
+    {
+      do: "Write `yield* Effect.logInfo(...)` for every log call.",
+      dont: "Do not write `Effect.logInfo(...)` on its own line without `yield*`.",
+      why: "A log call is an effect; without `yield*` the effect is made and dropped, and nothing prints."
+    },
+    {
+      do: "Change the minimum level with `Effect.provideService(References.MinimumLogLevel, \"Debug\")` for the part that you debug.",
+      dont: "Do not remove `logDebug` calls when you do not see them.",
+      why: "The default minimum level is `\"Info\"`; the debug lines are filtered, not lost, and a filtered line has almost no cost."
+    },
+    {
+      do: "Put `Effect.annotateLogs({ requestId })` on the full handler.",
+      dont: "Do not add the request id to each message string.",
+      why: "An annotation on the handler reaches every log line inside, and also the lines from the functions that the handler calls."
+    },
+    {
+      do: "Catch the `NoSuchElementError` of `Effect.currentSpan`, for example with `Effect.orElseSucceed`.",
+      dont: "Do not give `Effect.currentSpan` the type `Effect<Span>`.",
+      why: "When no span is active, `currentSpan` fails, and an annotation with `never` as the error type does not compile."
+    },
+    {
+      do: "Use `Metric.modify` to add to a gauge.",
+      dont: "Do not use `Metric.update` when you want to add to a gauge.",
+      why: "On a gauge, `update` replaces the current value, so `update(queue, -2)` sets the queue size to `-2`."
+    },
+    {
+      do: "Give `Effect.track` a metric that accepts an `Exit`, for example `Metric.withConstantInput(1)`.",
+      dont: "Do not pass a plain `Counter<number>` to `Effect.track`.",
+      why: "`Effect.track` records the `Exit` of the effect, and a counter of numbers does not accept an `Exit`, so the program does not compile."
     }
   ],
   challenges: [
     {
       id: "observability-c1",
       title: "The silent log",
-      task: `Only the first two lines appear. The warning is missing. Make all three log lines print, in order.`,
+      task: `Only the first 2 lines appear. The warning is absent. Change the program so that all 3 log lines print, in this order.`,
       code: `import { Effect, Logger } from "effect"
 
 const plain = Logger.make<unknown, void>(({ logLevel, message }) => {
@@ -351,16 +388,16 @@ Effect.runSync(program.pipe(Effect.provide(Logger.layer([plain]))))
 [Info] connected
 [Warn] using fallback region`,
       hints: [
-        "Logging is an effect. What happens to an effect that is created but never run?",
-        "Compare the three log lines in the generator. One of them is different.",
+        "A log call is an effect. What happens to an effect that you make but do not run?",
+        "Compare the 3 log lines in the generator. 1 of them is different.",
         "Put yield* in front of Effect.logWarning."
       ],
-      explanation: `\`Effect.logWarning("...")\` builds a description of a log event; it does not log. Without \`yield*\` the description is created, dropped, and nothing happens. This is the same recipe-versus-meal rule from Getting Started, and it is the most common logging bug in Effect code because \`console.log\` trained us to expect an immediate side effect.`
+      explanation: `\`Effect.logWarning("...")\` makes a description of a log event. It does not log. Without \`yield*\`, the description is made and then dropped. Nothing happens. This is the same rule as in Getting Started: an effect is a value, and only a run function does the work. This is the most common log bug in Effect code, because \`console.log\` has an immediate side effect and \`Effect.log\` does not.`
     },
     {
       id: "observability-c2",
-      title: "Where did the debug line go?",
-      task: `The program should print the debug line too, but it is filtered out. Change the program's configuration (not the log call) so all three lines print.`,
+      title: "The absent debug line",
+      task: `The program must print the debug line, but the line is filtered out. Change the configuration of the program, not the log call, so that all 3 lines print.`,
       code: `import { Effect, Logger } from "effect"
 
 const plain = Logger.make<unknown, void>(({ logLevel, message }) => {
@@ -398,16 +435,16 @@ Effect.runSync(
 [Debug] file a.csv: 120 rows
 [Info] import finished`,
       hints: [
-        "The default minimum log level is Info. Debug is below it.",
-        "The minimum level is a reference in the References module. Lesson 2 shows how to override one.",
+        "The default minimum log level is Info. Debug is below Info.",
+        "The minimum level is a reference in the References module. Lesson 2 shows how to change a reference.",
         "Add Effect.provideService(References.MinimumLogLevel, \"Debug\") to the pipe."
       ],
-      explanation: `Log events below \`References.MinimumLogLevel\` are dropped before any logger sees them. The default is \`"Info"\`. Overriding the reference with \`Effect.provideService\` changes the threshold for that region of the program only, which is exactly what you want: verbose in one subsystem, quiet elsewhere. The log call itself was correct, the configuration around it was not.`
+      explanation: `The runtime drops log events below \`References.MinimumLogLevel\` before a logger sees them. The default is \`"Info"\`. \`Effect.provideService\` changes the reference for that part of the program only. This is what you want: verbose in one subsystem, quiet in the others. The log call was correct. The configuration around it was not.`
     },
     {
       id: "observability-c3",
-      title: "The annotation that arrived too late",
-      task: `Both log lines should carry \`requestId=r-9\`, but only the second one does. Fix the placement of the annotation so the whole request is annotated.`,
+      title: "The annotation in the wrong place",
+      task: `Both log lines must have \`requestId=r-9\`, but only the second line has it. Move the annotation so that the full request is annotated.`,
       code: `import { Effect, Logger, References } from "effect"
 
 const plain = Logger.make<unknown, void>(({ logLevel, message, fiber }) => {
@@ -445,16 +482,16 @@ Effect.runSync(handle("r-9").pipe(Effect.provide(Logger.layer([plain]))))
       expectedOutput: `[Info] validating requestId=r-9
 [Info] saving requestId=r-9`,
       hints: [
-        "annotateLogs applies to the effect it wraps, and only that effect.",
-        "Which effect is wrapped right now? Which one should be?",
-        "Move .pipe(Effect.annotateLogs({ requestId })) from the single log call to the whole Effect.gen."
+        "annotateLogs applies to the effect that it wraps, and only to that effect.",
+        "Which effect is wrapped now? Which effect must be wrapped?",
+        "Move .pipe(Effect.annotateLogs({ requestId })) from the single log call to the full Effect.gen."
       ],
-      explanation: `\`Effect.annotateLogs\` is a region marker: it annotates every log event inside the effect it wraps and nothing outside. Wrapping only the "saving" call created a region one line wide. Wrapping the generator makes the region the whole request, so every line inside, including calls to other functions, inherits \`requestId\`. Put annotations at the boundary where the context becomes known, usually where a request or job starts.`
+      explanation: `\`Effect.annotateLogs\` marks one part of the program. It annotates every log event inside the effect that it wraps, and nothing outside. When you wrap only the "saving" call, the part is 1 line wide. When you wrap the generator, the part is the full request. Every line inside gets \`requestId\`, and this includes calls to other functions. Put an annotation at the boundary where the context becomes known. This is usually the point where a request or a job starts.`
     },
     {
       id: "observability-c4",
       title: "currentSpan can fail",
-      task: `\`spanName\` is meant to be a safe \`Effect<string>\` that yields the current span's name, or \`"no span"\` when there is none. It does not compile. Fix \`spanName\` without changing its type annotation or the program below it.`,
+      task: `\`spanName\` must be an \`Effect<string>\` that gives the name of the current span, or \`"no span"\` when there is no span. The program does not compile. Change \`spanName\` only. Do not change its type annotation or the program below it.`,
       code: `import { Effect } from "effect"
 
 const spanName: Effect.Effect<string> = Effect.currentSpan.pipe(
@@ -485,16 +522,16 @@ Effect.runSync(program)
       expectedOutput: `outside: no span
 inside: checkout`,
       hints: [
-        "Read the type error: what is the error type of Effect.currentSpan?",
-        "Effect<string> means the error type is never. Something must handle the NoSuchElementError.",
-        "Add Effect.orElseSucceed(() => \"no span\") after the map (or Effect.catch with Effect.succeed)."
+        "Read the type error. What is the error type of Effect.currentSpan?",
+        "Effect<string> means that the error type is never. Something must catch the NoSuchElementError.",
+        "Add Effect.orElseSucceed(() => \"no span\") after the map. Effect.catch with Effect.succeed also works."
       ],
-      explanation: `\`Effect.currentSpan\` has type \`Effect<Span, NoSuchElementError>\`: it fails when no span is active. The annotation \`Effect<string>\` promises it cannot fail, so the compiler refuses. Handling the error with \`orElseSucceed\` makes the promise true, and the "outside" call, which really has no span, now gets the fallback instead of crashing. The type system caught a real runtime crash before it happened.`
+      explanation: `The type of \`Effect.currentSpan\` is \`Effect<Span, NoSuchElementError>\`. It fails when no span is active. The annotation \`Effect<string>\` says that it cannot fail, so the compiler rejects it. \`orElseSucceed\` catches the error and makes the annotation true. The "outside" call has no span. It now gets the fallback text and does not crash. The type system found a real crash before it happened.`
     },
     {
       id: "observability-c5",
       title: "Set or add?",
-      task: `The gauge should end at \`5\` (7 items arrived, 2 were processed), but it prints \`-2\`. Fix the second metric call.`,
+      task: `The gauge must end at \`5\` (7 items arrived, 2 items were processed), but it prints \`-2\`. Change the second metric call.`,
       code: `import { Effect, Metric } from "effect"
 
 const queue = Metric.gauge("queue_size")
@@ -524,15 +561,15 @@ Effect.runSync(program)
       expectedOutput: `queue: 5`,
       hints: [
         "For a gauge, update replaces the current value.",
-        "Lesson 6 has a table: which function adds to a gauge instead of replacing it?",
+        "Lesson 6 has a table. Which function adds to a gauge and does not replace the value?",
         "Use Metric.modify(queue, -2)."
       ],
-      explanation: `A gauge holds one current value. \`Metric.update\` sets it, so \`update(queue, -2)\` made the queue size \`-2\`. \`Metric.modify\` adds to the current value, which is the "something left the queue" operation you wanted. For counters both functions add, which is why the difference only shows up on gauges.`
+      explanation: `A gauge holds 1 current value. \`Metric.update\` sets the value, so \`update(queue, -2)\` set the queue size to \`-2\`. \`Metric.modify\` adds to the current value. This is the operation "1 item left the queue" that you wanted. For a counter, both functions add. The difference is visible only on a gauge.`
     },
     {
       id: "observability-c6",
-      title: "Tracking an effect with a counter",
-      task: `\`Effect.track\` should increment \`runs\` by one each time \`job\` runs, but the program does not compile. Fix the counter definition so the program prints \`runs: 3\`.`,
+      title: "Track an effect with a counter",
+      task: `\`Effect.track\` must add 1 to \`runs\` each time \`job\` runs, but the program does not compile. Change the counter definition so that the program prints \`runs: 3\`.`,
       code: `import { Effect, Metric } from "effect"
 
 const runs = Metric.counter("job_runs")
@@ -567,11 +604,11 @@ Effect.runSync(program)
 `,
       expectedOutput: `runs: 3`,
       hints: [
-        "Effect.track feeds the Exit of the effect into the metric. A counter wants a number.",
-        "You need a metric whose input is ignored and always counts as 1.",
+        "Effect.track sends the Exit of the effect into the metric. A counter wants a number.",
+        "You need a metric that ignores its input and always records 1.",
         "Pipe the counter through Metric.withConstantInput(1)."
       ],
-      explanation: `\`Effect.track(metric)\` records the effect's \`Exit\` into the metric, so the metric's input type must accept an \`Exit\`. A plain \`Counter<number>\` accepts numbers, and the compiler says so. \`Metric.withConstantInput(1)\` builds a metric that accepts any input and always records \`1\`, which is the "count how many times this ran" shape. The alternative is \`Effect.track(runs, (exit) => 1)\`, where you map the exit yourself, useful when you want to count only failures.`
+      explanation: `\`Effect.track(metric)\` records the \`Exit\` of the effect into the metric. The input type of the metric must accept an \`Exit\`. A plain \`Counter<number>\` accepts numbers, and the compiler says so. \`Metric.withConstantInput(1)\` makes a metric that accepts any input and always records \`1\`. This is the shape for "count how many times this ran". The alternative is \`Effect.track(runs, (exit) => 1)\`, where you map the exit yourself. That form is useful when you count only failures.`
     }
   ],
   problems: [
@@ -581,11 +618,11 @@ Effect.runSync(program)
       spec: `
 Build a small request pipeline with structured logs and a counter.
 
-1. Write a logger \`plain\` with \`Logger.make\` that prints \`<LEVEL> <message> <key>=<value>...\` where LEVEL is the log level upper-cased, message parts are joined with spaces, and annotations (from \`References.CurrentLogAnnotations\`) are appended in insertion order, each as \` key=value\`.
-2. Write \`handle(requestId, path)\`: an \`Effect.gen\` that logs \`"handling"\` at Info, increments the counter \`served\` by 1, and logs \`"unknown path"\` at Warn when \`path\` is not \`"/"\` or \`"/health"\`. Annotate the whole handler with \`{ requestId, path }\`.
-3. \`program\` handles \`("r-1", "/")\`, \`("r-2", "/admin")\`, \`("r-3", "/health")\` in order, then prints \`served: <count>\` with \`console.log\`.
+1. Write a logger \`plain\` with \`Logger.make\`. It must print \`<LEVEL> <message> <key>=<value>...\`. LEVEL is the log level in upper case. The message parts are joined with spaces. The annotations (from \`References.CurrentLogAnnotations\`) follow in insertion order, each as \` key=value\`.
+2. Write \`handle(requestId, path)\` as an \`Effect.gen\`. It must log \`"handling"\` at Info, add 1 to the counter \`served\`, and log \`"unknown path"\` at Warn when \`path\` is not \`"/"\` and not \`"/health"\`. Annotate the full handler with \`{ requestId, path }\`.
+3. \`program\` must call \`handle\` for \`("r-1", "/")\`, \`("r-2", "/admin")\`, \`("r-3", "/health")\` in this order. Then it must print \`served: <count>\` with \`console.log\`.
 
-Run with the \`plain\` logger provided. Exact output:
+Run the program with the \`plain\` logger provided. Exact output:
 
 \`\`\`
 INFO handling requestId=r-1 path=/
@@ -648,20 +685,20 @@ WARN unknown path requestId=r-2 path=/admin
 INFO handling requestId=r-3 path=/health
 served: 3`,
       hints: [
-        "The logger receives { logLevel, message, fiber }. Annotations come from fiber.getRef(References.CurrentLogAnnotations).",
-        "Annotate the generator returned by handle with Effect.annotateLogs({ requestId, path }); the object key order gives you the output order.",
-        "Metric.update(served, 1) inside the handler, Metric.value(served) at the end."
+        "The logger gets { logLevel, message, fiber }. Read the annotations with fiber.getRef(References.CurrentLogAnnotations).",
+        "Annotate the generator that handle returns with Effect.annotateLogs({ requestId, path }). The key order of the object gives the output order.",
+        "Use Metric.update(served, 1) inside the handler and Metric.value(served) at the end."
       ]
     },
     {
       id: "observability-p2",
       title: "Traced checkout with a price histogram",
       spec: `
-Trace a checkout and measure item prices.
+Trace a checkout and measure the item prices.
 
-1. Write \`enter\`: an effect that reads \`Effect.currentSpan\` and prints \`enter <name> (parent: <parentName or none>)\`. If the parent is an external span print \`external\`.
-2. Write \`priceItem(name, price)\`: records \`price\` into the histogram \`prices\` (boundaries \`[10, 50]\`), runs \`enter\`, and is wrapped in a span named \`price:<name>\`.
-3. Write \`checkout\`: runs \`enter\`, then \`priceItem\` for \`("book", 12)\`, \`("pen", 3)\`, \`("desk", 180)\`, then prints \`items: <count> total: <sum>\` from \`Metric.value(prices)\`. Wrap it in a span named \`checkout\`.
+1. Write \`enter\`, an effect that reads \`Effect.currentSpan\` and prints \`enter <name> (parent: <parentName or none>)\`. If the parent is an external span, print \`external\`.
+2. Write \`priceItem(name, price)\`. It must record \`price\` into the histogram \`prices\` (boundaries \`[10, 50]\`), then run \`enter\`. Wrap it in a span with the name \`price:<name>\`.
+3. Write \`checkout\`. It must run \`enter\`, then \`priceItem\` for \`("book", 12)\`, \`("pen", 3)\`, \`("desk", 180)\`, then print \`items: <count> total: <sum>\` from \`Metric.value(prices)\`. Wrap it in a span with the name \`checkout\`.
 
 Exact output:
 
@@ -674,7 +711,7 @@ items: 3 total: 195
 buckets: [[10,1],[50,2]]
 \`\`\`
 
-The last line is \`JSON.stringify\` of the histogram's \`buckets\`.
+The last line is \`JSON.stringify\` of the \`buckets\` of the histogram.
 `,
       starter: `import { Effect, Metric, Option } from "effect"
 
@@ -728,36 +765,36 @@ enter price:desk (parent: checkout)
 items: 3 total: 195
 buckets: [[10,1],[50,2]]`,
       hints: [
-        "span.parent is an Option<AnySpan>. Option.match with onNone / onSome handles both cases; check p._tag === \"Span\" before reading p.name.",
-        "Effect.withSpan(\"price:\" + name) goes on the generator returned by priceItem, so the span exists when enter runs inside it.",
-        "Histogram state has count, sum, and buckets. 3 is at or below 10; 3 and 12 are at or below 50; 180 is above both."
+        "span.parent is an Option<AnySpan>. Option.match with onNone and onSome covers both cases. Check p._tag === \"Span\" before you read p.name.",
+        "Put Effect.withSpan(\"price:\" + name) on the generator that priceItem returns. Then the span exists when enter runs inside it.",
+        "The histogram state has count, sum, and buckets. 3 is at or below 10. 3 and 12 are at or below 50. 180 is above both limits."
       ]
     }
   ],
   recall: [
     {
-      q: "Why does `Effect.log` print nothing by itself in a custom setup, and what decides the format?",
-      a: "`Effect.log` emits a log event to the current set of `Logger` services. The loggers decide the format and destination. `Logger.layer([...])` replaces that set, `{ mergeWithExisting: true }` adds to it."
+      q: "Why does `Effect.log` print nothing by itself, and what decides the format?",
+      a: "`Effect.log` sends a log event to the current set of `Logger` services. The loggers decide the format and the destination. `Logger.layer([...])` replaces that set. The option `{ mergeWithExisting: true }` adds to it."
     },
     {
-      q: "What would the type of `Effect.currentSpan` be, and why is it not `Effect<Span>`?",
-      a: "`Effect<Span, NoSuchElementError>`. There may be no active span, and Effect makes that failure visible in the error channel instead of returning `undefined`."
+      q: "What is the type of `Effect.currentSpan`, and why is it not `Effect<Span>`?",
+      a: "`Effect<Span, NoSuchElementError>`. There can be no active span. Effect shows that failure in the error channel. It does not return `undefined`."
     },
     {
       q: "How do you show `Effect.logDebug` lines in v4?",
-      a: "Override the `References.MinimumLogLevel` reference for the region you care about: `Effect.provideService(References.MinimumLogLevel, \"Debug\")`, or `Layer.succeed(References.MinimumLogLevel, \"Debug\")` in a layer. The default is `\"Info\"`."
+      a: "Change the `References.MinimumLogLevel` reference for the part of the program: `Effect.provideService(References.MinimumLogLevel, \"Debug\")`. In a layer, use `Layer.succeed(References.MinimumLogLevel, \"Debug\")`. The default is `\"Info\"`."
     },
     {
-      q: "Which function would you reach for to attach a `requestId` to every log line in a handler, including lines logged by functions it calls?",
-      a: "`Effect.annotateLogs(handler, { requestId })`. Annotations travel with the fiber, so nested calls inherit them without being passed the id."
+      q: "Which function do you use to attach a `requestId` to every log line in a handler, and also to the lines from the functions that the handler calls?",
+      a: "`Effect.annotateLogs(handler, { requestId })`. The annotations travel with the fiber. The inner calls get them, and you do not pass the id as an argument."
     },
     {
       q: "What is the difference between `Metric.update` and `Metric.modify` on a gauge?",
-      a: "`update` sets the gauge to the given value; `modify` adds the value to the current one. On a counter both add."
+      a: "`update` sets the gauge to the given value. `modify` adds the value to the current value. On a counter, both functions add."
     },
     {
-      q: "How do spans know their parent?",
-      a: "The current span is carried by the fiber. `Effect.withSpan` reads it, creates a child, and makes the child current for the wrapped effect. When the effect ends the span is closed and the parent becomes current again."
+      q: "How does a span know its parent?",
+      a: "The fiber carries the current span. `Effect.withSpan` reads it, makes a child span, and makes the child the current span for the wrapped effect. When the effect ends, the span is closed and the parent is the current span again."
     }
   ]
 }

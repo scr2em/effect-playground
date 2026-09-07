@@ -4,58 +4,58 @@ const section: Section = {
   id: "stream",
   title: "Stream",
   order: 13,
-  summary: "Streams: an Effect that produces many values, lazily, with typed errors, backpressure and concurrency.",
+  summary: "A stream is an effect that emits many elements. It is lazy, it has typed errors, and it controls concurrency.",
   intro: `
-**The problem.** When data comes in pieces, plain TypeScript gives you two tools and both hurt. The first is an array:
+**The problem.** In plain TypeScript, data that arrives in parts gives you 2 tools. Both tools have problems. The first tool is an array:
 
 \`\`\`ts
 const rows = await db.loadAllRows()          // 2 million rows in memory
 const top = rows.filter(isPaid).map(total).slice(0, 10)
 \`\`\`
 
-You wanted ten rows, you loaded two million. The second tool is an async generator with \`for await\`:
+You want 10 rows. The program loads 2 million rows into memory. The second tool is an async generator with \`for await\`:
 
 \`\`\`ts
-async function* rows() { /* yield one row at a time */ }
+async function* rows() { /* yield 1 row at a time */ }
 for await (const row of rows()) { /* ... */ }
 \`\`\`
 
-This fixes memory but nothing else. There is no error type: a throw inside the generator crashes the loop. There is no way to process three rows at a time without hand-written bookkeeping. If you \`break\` out of the loop, cleanup of the underlying connection is your job. And you cannot hand the loop to another function to add a retry or a timeout, because a loop is not a value.
+This tool solves the memory problem and nothing else. The generator has no error type. A throw inside the generator stops the loop. You cannot process 3 rows at the same time without manual bookkeeping code. If you \`break\` out of the loop, you must close the connection yourself. You cannot give the loop to another function that adds a retry or a timeout. A loop is not a value.
 
 ### The shift
 
-Today you think of a sequence as **something you pull from with a loop and hope for the best**. Effect asks you to think of it as **a value that describes many results**. A \`Stream<A, E, R>\` is an Effect that, when run, produces zero or more \`A\` values instead of exactly one. Same three type parameters, same rules: it does nothing until run, its errors are typed, its requirements are tracked.
+Today you think of a sequence as data that you pull from with a loop. In Effect, a sequence is a value. A \`Stream<A, E, R>\` is an effect that emits 0 or more elements of type \`A\` when you run it. An effect gives 1 result. A stream emits many elements. The 3 type parameters have the same meaning. The stream does nothing until you run it. Its errors are typed. Its requirements are tracked.
 
-Because it is a value you get the rest for free. \`Stream.map\` and \`Stream.filter\` work like array methods but process one element at a time. \`Stream.take(10)\` stops the producer after ten elements, so an infinite source is fine. The consumer pulls: a slow consumer does not get buried under a fast producer, which is what "backpressure" means. Resources opened by the stream are closed when it ends, whether it finished, failed, or was interrupted.
+Because a stream is a value, you get more. \`Stream.map\` and \`Stream.filter\` work like the array methods, but they process 1 element at a time. \`Stream.take(10)\` stops the stream after 10 elements, so an infinite stream is safe. The part that emits elements is the producer. The part that reads elements is the consumer. The consumer pulls elements from the producer. A slow consumer does not receive more elements than it can process. This property is called backpressure. When the stream ends, fails, or is interrupted, Effect closes the resources that the stream opened.
 
 | | Array | Async generator | Stream |
 |---|---|---|---|
-| Memory | Everything at once | One at a time | One chunk at a time |
-| Error type | none, throws | none, throws | Tracked in \`E\` |
-| Concurrency | \`Promise.all\` on the whole array | Manual | \`mapEffect(f, { concurrency })\` |
-| Stops early | \`slice\` after loading all | \`break\` | \`take\`, \`takeWhile\` |
-| Cleanup on stop | n/a | \`finally\` in the generator | Automatic |
-| Retry / timeout | Wrap by hand | Wrap by hand | \`Stream.retry\`, \`Stream.timeout\` |
+| Memory | All elements at once | 1 element at a time | 1 chunk (a small array) at a time |
+| Error type | None. The code throws. | None. The generator throws. | Tracked in \`E\` |
+| Concurrency | \`Promise.all\` on the full array | Manual code | \`mapEffect(f, { concurrency })\` |
+| Stops early | \`slice\` after the full load | \`break\` | \`take\`, \`takeWhile\` |
+| Cleanup on stop | Not applicable | \`finally\` in the generator | Automatic |
+| Retry, timeout | Manual code | Manual code | \`Stream.retry\`, \`Stream.timeout\` |
 
-In this section you will build streams, transform them, run them, and see why laziness matters. The consumer side gets its own section next: Sink.
+In this section you build streams, transform them, run them, and see why laziness is important. The next section, Sink, covers the consumer side.
 `,
   lessons: [
     {
       id: "stream-l1",
-      title: "A Stream is an Effect that produces many values",
+      title: "A stream is an effect that emits many elements",
       explain: `
-You build a Stream the same way you build an Effect: with a constructor. And like an Effect, a Stream is only a description. Nothing runs until you hand it to a \`run\` function.
+You build a stream with a constructor, in the same way that you build an effect. A stream is only a description. Nothing runs until you give the stream to a run function.
 
-| Constructor | Produces | Use when |
+| Constructor | Emits | Use when |
 |---|---|---|
-| \`Stream.make(1, 2, 3)\` | The given values | Fixed test data |
-| \`Stream.fromIterable(xs)\` | Every element of an array, Set, or generator | You already have a collection |
-| \`Stream.range(1, 5)\` | \`1, 2, 3, 4, 5\` (both ends included) | Counting |
-| \`Stream.fromEffect(eff)\` | One value, the result of the Effect | Lift a single Effect |
-| \`Stream.succeed(x)\` / \`Stream.fail(e)\` | One value / no values, fails | The single-element cases |
-| \`Stream.fromQueue(q)\` | Values offered to a Queue, until \`Queue.end\` | Something else pushes data in |
+| \`Stream.make(1, 2, 3)\` | The given elements | You have fixed test data |
+| \`Stream.fromIterable(xs)\` | Each element of an array, a Set, or a generator | You have a collection |
+| \`Stream.range(1, 5)\` | \`1, 2, 3, 4, 5\`, both ends included | You count |
+| \`Stream.fromEffect(eff)\` | 1 element, the result of the effect | You have 1 effect |
+| \`Stream.succeed(x)\` / \`Stream.fail(e)\` | 1 element / no element and a failure | You have 1 element or 1 error |
+| \`Stream.fromQueue(q)\` | Each element that the program offers to a queue, until \`Queue.end\` | Another part of the program pushes data |
 
-\`Stream.runCollect\` runs a stream and gathers every value into an array. It returns an \`Effect<Array<A>, E, R>\`, so you still need \`yield*\` or a runner to get the array. That is the pattern for the whole section: a \`run\` function turns a Stream into an Effect.
+\`Stream.runCollect\` runs a stream and puts all elements into an array. It returns an \`Effect<Array<A>, E, R>\`. You must use \`yield*\` or a run function to get the array. This is the pattern for the full section: a run function changes a stream into an effect.
 `,
       code: `import { Cause, Effect, Queue, Stream } from "effect"
 
@@ -93,25 +93,25 @@ make [ "a", "b" ]
 fromIterable [ 1, 2 ]
 fromEffect [ 42 ]
 fromQueue [ "job-1", "job-2" ]`,
-      after: `The "producing" lines appear after "built, nothing produced yet". Try running \`Stream.runCollect(numbers)\` twice: the stream produces its values again, because it is a recipe. Try deleting \`Queue.end\`: the queue stream waits forever for more values, and the program never finishes.`
+      after: `The "producing" lines appear after "built, nothing produced yet". Run \`Stream.runCollect(numbers)\` 2 times. The stream emits its elements again, because the stream is a description. Note: if you remove \`Queue.end\`, the queue stream waits for more elements, and the program does not end.`
     },
     {
       id: "stream-l2",
-      title: "Transforming: the array methods, one element at a time",
+      title: "Transform elements: the array functions, 1 element at a time",
       explain: `
-The everyday operators look like array methods, and read the same way in a \`pipe\`. The difference is that they process elements as they arrive instead of building a new array at every step.
+The common stream functions look like the array methods, and they read the same in a \`pipe\`. The difference: a stream function processes each element when the element arrives. It does not build a new array at each step.
 
 | Stream | Array equivalent | Notes |
 |---|---|---|
-| \`Stream.map(f)\` | \`.map(f)\` | Pure transformation |
-| \`Stream.filter(p)\` | \`.filter(p)\` | Type guards narrow the element type |
+| \`Stream.map(f)\` | \`.map(f)\` | A pure transformation |
+| \`Stream.filter(p)\` | \`.filter(p)\` | A type guard narrows the element type |
 | \`Stream.take(n)\` | \`.slice(0, n)\` | Also stops the producer |
 | \`Stream.drop(n)\` | \`.slice(n)\` | |
-| \`Stream.takeWhile(p)\` | Loop with \`break\` | Stops at the first failing element |
-| \`Stream.tap(f)\` | Log inside \`.map\` | Runs an Effect per element, keeps the element |
-| \`Stream.scan(init, f)\` | \`.reduce\`, but emitting every step | Running totals |
+| \`Stream.takeWhile(p)\` | A loop with \`break\` | Stops at the first element that fails the test |
+| \`Stream.tap(f)\` | A log call inside \`.map\` | Runs an effect for each element and keeps the element |
+| \`Stream.scan(init, f)\` | \`.reduce\`, but it emits each step | The total so far |
 
-\`scan\` is the one without a direct array twin. It is a \`reduce\` that emits the accumulator after every element (and the initial value first), so a stream of amounts becomes a stream of running balances.
+\`scan\` has no direct array equivalent. It is a \`reduce\` that emits the accumulator after each element. It also emits the initial value first. With \`scan\`, a stream of amounts becomes a stream of balances.
 `,
       code: `import { Effect, Stream } from "effect"
 
@@ -145,25 +145,25 @@ Effect.runPromise(program)
       expectedOutput: `first two deposits in cents [ 5000, 3000 ]
 until first withdrawal [ 50 ]
 running balance [ 50, 30, 60, 55, 155, 95 ]`,
-      after: `Remove the \`Stream.drop(1)\` and the balance list starts with the initial \`0\`. \`scan\` always emits the seed first; that is useful when the seed is a real state, and noise when it is not.`
+      after: `Remove \`Stream.drop(1)\`. The balance list then starts with the initial \`0\`. \`scan\` always emits the initial value first. This is useful when the initial value is a real state. It is noise when it is not.`
     },
     {
       id: "stream-l3",
-      title: "Running: the run family",
+      title: "Run a stream: the run functions",
       explain: `
-A Stream becomes an Effect only through a \`run\` function. Pick the one that matches the shape of the answer you want. Collecting everything into an array is the most common and also the one that gives up the memory benefit, so learn the others.
+A stream becomes an effect only through a run function. Select the function that matches the result that you want. \`runCollect\` is the most common function. It is also the function that loses the memory benefit, so learn the other functions.
 
 | Function | Result type | Use when |
 |---|---|---|
-| \`Stream.runCollect\` | \`Effect<Array<A>>\` | You need all values, and they fit in memory |
-| \`Stream.runHead\` | \`Effect<Option<A>>\` | Only the first value matters; stops early |
-| \`Stream.runLast\` | \`Effect<Option<A>>\` | Only the final value matters |
-| \`Stream.runFold(() => init, f)\` | \`Effect<Z>\` | Reduce to one value (sum, max, a Map) |
-| \`Stream.runForEach(f)\` | \`Effect<void>\` | Do an Effect per element (write, send) |
-| \`Stream.runDrain\` | \`Effect<void>\` | Run for the side effects in \`tap\`, ignore values |
-| \`Stream.runCount\` | \`Effect<number>\` | How many elements |
+| \`Stream.runCollect\` | \`Effect<Array<A>>\` | You need all elements, and they fit in memory |
+| \`Stream.runHead\` | \`Effect<Option<A>>\` | Only the first element is important. Stops early. |
+| \`Stream.runLast\` | \`Effect<Option<A>>\` | Only the last element is important |
+| \`Stream.runFold(() => init, f)\` | \`Effect<Z>\` | Reduce to 1 value: a sum, a maximum, a Map |
+| \`Stream.runForEach(f)\` | \`Effect<void>\` | Do an effect for each element: write, send |
+| \`Stream.runDrain\` | \`Effect<void>\` | Run for the side effects in \`tap\`. Ignores the elements. |
+| \`Stream.runCount\` | \`Effect<number>\` | Count the elements |
 
-Two details that catch people. \`runHead\` and \`runLast\` return an \`Option\`, because the stream may be empty; use \`Option.getOrElse\` or \`Option.match\` to print. And \`runFold\` takes the initial value as a function \`() => init\`, not a plain value, so that each run starts from a fresh accumulator (a fresh \`[]\` or \`new Map()\`).
+Note: \`runHead\` and \`runLast\` return an \`Option\`, because the stream can be empty. Note: \`runFold\` takes the initial value as a function \`() => init\`, not as a plain value. Each run then starts with a new accumulator, for example a new \`[]\` or a new \`Map\`.
 `,
       code: `import { Effect, Option, Stream } from "effect"
 
@@ -208,25 +208,25 @@ grade pass
 grade fail
 seen 72
 seen 95`,
-      after: `\`runHead\` stopped pulling after the first element; the stream never produced the others. Compare with \`runLast\`, which had to pull all four. Choosing the right runner is how you avoid doing work you throw away.`
+      after: `\`runHead\` stopped after the first element. The stream did not emit the other elements. \`runLast\` pulled all 4 elements. Select the correct run function to prevent work whose result you do not use.`
     },
     {
       id: "stream-l4",
-      title: "Pull and laziness: infinite streams are fine",
+      title: "Pull and laziness: infinite streams are safe",
       explain: `
-A Stream is pull-based. The consumer asks for the next chunk; the producer computes it and waits. Nothing is produced ahead of demand. Two things follow from this.
+A stream is pull-based. The consumer asks for the next chunk. The producer computes the chunk and then waits. The producer emits nothing before the consumer asks. 2 results follow from this.
 
-First, an infinite stream is a normal value. \`Stream.iterate(0, (n) => n + 1)\` describes every natural number. Add \`Stream.take(5)\` and the run finishes after five pulls. Forget the \`take\` and \`runCollect\` never returns, because it keeps asking for more. This is the one rule of this section: **an infinite stream must end with a \`take\`, \`takeWhile\`, or a runner that stops early such as \`runHead\`.**
+First, an infinite stream is a normal value. \`Stream.iterate(0, (n) => n + 1)\` describes all natural numbers. Add \`Stream.take(5)\`, and the run ends after 5 pulls. If you remove the \`take\`, \`runCollect\` never returns. Caution: an infinite stream must end with \`take\`, \`takeWhile\`, or a run function that stops early, for example \`runHead\`.
 
-Second, laziness means expensive sources do only the work that is consumed. In the example, \`fetchPage\` counts how many times it is called. Taking three items from pages of two calls it twice, not four times.
+Second, an expensive source does only the work that the consumer uses. In the example, \`fetchPage\` counts its calls. When you take 3 elements from pages of 2, the stream calls \`fetchPage\` 2 times, not 4 times.
 
 | Constructor | Ends? | What it does |
 |---|---|---|
-| \`Stream.iterate(seed, next)\` | Never | \`seed, next(seed), next(next(seed)), ...\` |
-| \`Stream.unfold(seed, step)\` | When \`step\` returns \`undefined\` | Like iterate, but each step is an Effect and can stop |
-| \`Stream.tick(interval)\` | Never | One \`void\` immediately, then one per interval |
-| \`Stream.fromSchedule(s)\` | When the schedule ends | One value per schedule step, with the schedule's delays |
-| \`Stream.paginate(cursor, fetch)\` | When \`fetch\` returns \`Option.none()\` for the next cursor | Paginated APIs |
+| \`Stream.iterate(seed, next)\` | Never | Emits \`seed, next(seed), next(next(seed)), ...\` |
+| \`Stream.unfold(seed, step)\` | When \`step\` returns \`undefined\` | Like \`iterate\`, but each step is an effect and can stop |
+| \`Stream.tick(interval)\` | Never | Emits 1 \`void\` immediately, then 1 \`void\` after each interval |
+| \`Stream.fromSchedule(s)\` | When the schedule ends | Emits 1 element for each schedule step, with the delays of the schedule |
+| \`Stream.paginate(cursor, fetch)\` | When \`fetch\` returns \`Option.none()\` as the next cursor | Reads paginated APIs. A cursor identifies the next page. |
 `,
       code: `import { Effect, Option, Schedule, Stream } from "effect"
 
@@ -273,25 +273,25 @@ ticks 3
 schedule steps [ 0, 1, 2 ]
 took [ "a", "b", "c" ] with 2 fetches
 took [ "a", "b", "c", "d", "e", "f", "g" ] with 4 fetches`,
-      after: `Notice the \`take(5)\` comes after the \`filter\`. Take five, then filter, would give you at most five candidates and fewer results. Order in a pipeline is order of pulling. Try moving the \`take\` above the \`filter\` and see how many squares come out.`
+      after: `The \`take(5)\` comes after the \`filter\`. If \`take\` comes first, the filter receives only 5 candidates and emits fewer results. The order in a pipeline is the order of the pulls. Move the \`take\` above the \`filter\` and count the squares.`
     },
     {
       id: "stream-l5",
-      title: "Side by side: async generator vs Stream with mapEffect",
+      title: "Side by side: an async generator and Stream.mapEffect",
       explain: `
-Here is a common job in plain TypeScript: for a list of ids, call a slow API for each, keep the results in order, and do not run more than three calls at once.
+This is a common task in plain TypeScript. For a list of ids, call a slow API for each id, keep the results in order, and run at most 3 calls at the same time.
 
 \`\`\`ts
 async function* enrich(ids: number[]) {
-  // "three at a time, keep order" needs a manual worker pool.
-  // Most people give up and write either a serial loop (slow)
-  // or Promise.all (unbounded, order kept only by luck of the array index).
+  // "3 at a time, in order" needs a manual worker pool.
+  // Most code uses a serial loop (slow) or Promise.all
+  // (no limit; the order depends on the array index only).
   for (const id of ids) yield await fetchUser(id)
 }
 for await (const user of enrich([1, 2, 3, 4, 5, 6])) console.log(user)
 \`\`\`
 
-\`Stream.mapEffect\` is \`map\` for functions that return an Effect. Without options it runs one at a time. With \`{ concurrency: 3 }\` it keeps three in flight and still emits results in the original order. The example tracks the peak number of in-flight calls to prove it; that number is stable because every call waits the same tiny amount.
+\`Stream.mapEffect\` is \`map\` for a function that returns an effect. Without options, it runs 1 call at a time. With \`{ concurrency: 3 }\`, it runs 3 calls at the same time and emits the results in the input order. The example counts the maximum number of calls that run at the same time. This number is stable, because each call waits for the same short time.
 `,
       code: `import { Effect, Stream } from "effect"
 
@@ -326,24 +326,24 @@ Effect.runPromise(program)
 `,
       expectedOutput: `serial     [ "user-1", "user-2", "user-3", "user-4", "user-5", "user-6" ] peak 1
 concurrent [ "user-1", "user-2", "user-3", "user-4", "user-5", "user-6" ] peak 3`,
-      after: `The results stay in order even though calls overlap. If you do not care about order, add \`unordered: true\` to the options and results are emitted as soon as they finish. \`Stream.tap\` accepts the same \`concurrency\` option, and \`Stream.flatMap\` does too for stream-returning functions.`
+      after: `The results keep their order, although the calls overlap. If the order is not important, add \`unordered: true\` to the options. The stream then emits each result as soon as it is ready. \`Stream.tap\` and \`Stream.flatMap\` accept the same \`concurrency\` option.`
     },
     {
       id: "stream-l6",
-      title: "Combining streams: zip, merge, flatMap, grouped",
+      title: "Combine streams: zip, merge, flatMap, grouped",
       explain: `
-Real pipelines have more than one source, or need to reshape elements into batches. These operators combine or regroup.
+Real pipelines have more than 1 source, or they must put elements into groups. These functions combine streams or regroup elements.
 
-| Operator | Result | Use when |
+| Function | Result | Use when |
 |---|---|---|
-| \`Stream.zip(other)\` | Pairs \`[a, b]\`, stops at the shorter | Two streams that line up, like values and indexes |
-| \`Stream.zipWith(other, f)\` | \`f(a, b)\` per pair | Same, without the tuple |
-| \`Stream.merge(other)\` | Elements of both, in arrival order | Two independent sources (two queues, two sockets) |
-| \`Stream.flatMap(f)\` | Every element of every \`f(a)\` | One input becomes zero or more outputs |
-| \`Stream.grouped(n)\` | Arrays of \`n\` elements, last may be shorter | Batching writes |
-| \`Stream.groupedWithin(n, duration)\` | Arrays of up to \`n\`, or whatever arrived within the duration | Batching with a latency bound |
+| \`Stream.zip(other)\` | Pairs \`[a, b]\`. Stops at the end of the shorter stream. | 2 streams that line up, for example elements and indexes |
+| \`Stream.zipWith(other, f)\` | \`f(a, b)\` for each pair | The same, without the tuple |
+| \`Stream.merge(other)\` | The elements of both streams, in arrival order | 2 independent sources, for example 2 queues |
+| \`Stream.flatMap(f)\` | Each element of each \`f(a)\` | 1 input element becomes 0 or more output elements |
+| \`Stream.grouped(n)\` | Arrays of \`n\` elements. The last array can be shorter. | Batch writes |
+| \`Stream.groupedWithin(n, duration)\` | Arrays of \`n\` elements at most, or the elements that arrived in the duration | Batch writes with a time limit |
 
-\`merge\` interleaves in the order elements become ready, so its output order is not guaranteed. The example sorts the merged values before printing; in a real program you would not rely on the order at all. \`flatMap\` returning \`Stream.empty\` is the idiom for "drop this element", and returning \`Stream.make(x, y)\` is "expand into two".
+Note: \`merge\` emits elements in the order in which they become ready. The output order is not guaranteed. The example sorts the merged elements before it prints them. In a real program, do not depend on the order. In \`flatMap\`, return \`Stream.empty\` to remove an element. Return \`Stream.make(x, y)\` to expand an element into 2 elements.
 `,
       code: `import { Effect, Stream } from "effect"
 
@@ -385,22 +385,22 @@ grouped [
 zip stops at the shorter [
   [ "ada", true ], [ "lin", false ]
 ]`,
-      after: `\`zipWith\` against the infinite \`Stream.iterate(1, ...)\` is safe: zip stops when \`names\` ends, so the infinite side is only pulled three times. \`Stream.zipWithIndex\` is the shortcut for exactly this numbering.`
+      after: `\`zipWith\` with the infinite \`Stream.iterate(1, ...)\` is safe. \`zip\` stops when \`names\` ends, so it pulls only 3 elements from the infinite side. \`Stream.zipWithIndex\` does the same and adds the index for you.`
     },
     {
       id: "stream-l7",
       title: "Errors in streams: catch, catchTag, retry",
       explain: `
-A stream's \`E\` works like an Effect's. Any element step can fail, and the first failure ends the stream. The handlers mirror the Effect ones, but the recovery is a *stream*: whatever you return continues the output from the point of failure.
+The \`E\` of a stream works like the \`E\` of an effect. Each element step can fail. The first failure ends the stream. The catch functions mirror the effect functions, but the replacement is a stream. The stream that you return continues the output from the point of the failure.
 
 | Function | What it does |
 |---|---|
-| \`Stream.catch((e) => fallbackStream)\` | Handle every error, continue with another stream |
-| \`Stream.catchTag("Tag", (e) => fallbackStream)\` | Handle one tagged error, others stay in \`E\` |
-| \`Stream.retry(schedule)\` | Re-run the whole stream from the start on failure |
-| \`Stream.mapError(f)\` | Change the error type, do not handle it |
+| \`Stream.catch((e) => replacement)\` | Catches each error and continues with the replacement stream |
+| \`Stream.catchTag("Tag", (e) => replacement)\` | Catches 1 tagged error. The other errors stay in \`E\`. |
+| \`Stream.retry(schedule)\` | Runs the full stream again from the start after a failure |
+| \`Stream.mapError(f)\` | Changes the error type. Does not catch the error. |
 
-\`retry\` restarts the stream, so it re-runs whatever opened it. That is right for a source that failed to connect, and wrong for a source that already emitted half its elements to a consumer that cannot handle duplicates. Wrap the source in \`Stream.suspend\` when the failure depends on state that changes between attempts, as the flaky source below does.
+Note: \`retry\` starts the stream again, so the stream runs its start-up steps again. This is correct for a source that failed to connect. It is wrong for a source that emitted half of its elements to a consumer that cannot accept duplicates. Use \`Stream.suspend\` when the failure depends on a state that changes between attempts. The flaky source below does this.
 `,
       code: `import { Effect, Schedule, Schema, Stream } from "effect"
 
@@ -441,14 +441,51 @@ Effect.runPromise(program)
       expectedOutput: `[ "ok 1", "ok 2", "skipped line 3" ]
 [ "run failed with Corrupt" ]
 [ "connected on attempt 3" ]`,
-      after: `"never reached" is never emitted: a failure ends the stream, and the fallback replaces the rest, not the failed element only. If you need per-element recovery, handle the error inside the \`mapEffect\` function with \`Effect.catch\` so the stream itself never fails.`
+      after: `The stream never emits "never reached". A failure ends the stream. The replacement stream replaces the rest of the stream, not only the element that failed. If you need recovery for each element, catch the error inside the \`mapEffect\` function with \`Effect.catch\`. The stream then never fails.`
+    }
+  ],
+  dosAndDonts: [
+    {
+      do: "End an infinite stream with `Stream.take`, `Stream.takeWhile`, or a run function that stops early, for example `runHead`.",
+      dont: "Do not run `Stream.iterate` or `Stream.tick` with `runCollect` and no `take`.",
+      why: "The consumer pulls again and again, and the program never ends."
+    },
+    {
+      do: "Consume a stream with a run function (`runCollect`, `runForEach`, `runDrain`) before you give it to `Effect.runPromise`.",
+      dont: "Do not pass a `Stream` to `Effect.runPromise`, and do not `yield*` a stream.",
+      why: "A stream is not an effect, so the program does not compile and nothing runs."
+    },
+    {
+      do: "Use `Stream.mapEffect` for a function that returns an effect.",
+      dont: "Do not use `Stream.map` with a function that returns an effect.",
+      why: "`map` gives a `Stream<Effect<A>>`, and the next step receives effects instead of values."
+    },
+    {
+      do: "Give `Stream.runFold` the initial value as a function, `() => init`.",
+      dont: "Do not pass a plain object or array as the initial value of `runFold`.",
+      why: "A plain mutable value is shared between runs, and the second run starts with the state of the first run."
+    },
+    {
+      do: "Put `Stream.take(n)` after `Stream.filter` when you want `n` matches.",
+      dont: "Do not put `take` before `filter`.",
+      why: "`take` limits the elements above it, so the filter receives only `n` candidates and emits fewer matches."
+    },
+    {
+      do: "Sort the output of `Stream.merge`, or write code that does not depend on the order.",
+      dont: "Do not depend on the element order after `Stream.merge`.",
+      why: "`merge` emits elements in arrival order, and the arrival order can be different in each run."
+    },
+    {
+      do: "Catch the error inside the `mapEffect` function with `Effect.catch` when each element must recover.",
+      dont: "Do not use `Stream.catch` when the stream must continue after a bad element.",
+      why: "A failure ends the stream, and `Stream.catch` replaces the rest of the stream, not the 1 element that failed."
     }
   ],
   challenges: [
     {
       id: "stream-c1",
-      title: "A stream is not an Effect",
-      task: `The program should print \`processing 1\`, \`processing 2\`, \`processing 3\` but it does not compile. Fix the last line without touching the pipeline.`,
+      title: "A stream is not an effect",
+      task: `The program must print \`processing 1\`, \`processing 2\`, \`processing 3\`, but it does not compile. Change the last line only.`,
       code: `import { Effect, Stream } from "effect"
 
 const pipeline = Stream.range(1, 3).pipe(
@@ -469,16 +506,16 @@ Effect.runPromise(Stream.runDrain(pipeline))
 processing 2
 processing 3`,
       hints: [
-        "Read the type error: a Stream is being passed where an Effect is expected.",
-        "Lesson 3 lists the functions that turn a Stream into an Effect.",
-        "You only want the side effects, so wrap the stream in Stream.runDrain before running it."
+        "Read the type error. The program gives a stream to a function that expects an effect.",
+        "Lesson 3 lists the functions that change a stream into an effect.",
+        "You want only the side effects. Put the stream in Stream.runDrain before you run it."
       ],
-      explanation: `\`Effect.runPromise\` runs Effects, and a Stream is not one. A Stream must first be consumed by a \`run\` function, which decides what the result is: an array, the first value, a count, or nothing. \`runDrain\` is the "nothing" case, right for a pipeline whose useful work happens in \`tap\`. The compiler caught it because \`Stream\` and \`Effect\` are different types, even though they share three type parameters.`
+      explanation: `\`Effect.runPromise\` runs effects. A stream is not an effect. A run function must first consume the stream. The run function decides the result: an array, the first element, a count, or nothing. \`runDrain\` is the "nothing" case. It is correct for a pipeline where the useful work happens in \`tap\`. The compiler found the error because \`Stream\` and \`Effect\` are different types, although they have the same 3 type parameters.`
     },
     {
       id: "stream-c2",
-      title: "Batches, not windows",
-      task: `The writer expects batches of three: \`[1,2,3]\`, \`[4,5,6]\`, \`[7]\`. The program prints overlapping windows instead. Change one function name.`,
+      title: "Groups, not windows",
+      task: `The writer expects groups of 3: \`[1,2,3]\`, \`[4,5,6]\`, \`[7]\`. The program prints windows that overlap. Change 1 function name.`,
       code: `import { Effect, Stream } from "effect"
 
 const program = Stream.range(1, 7).pipe(
@@ -501,16 +538,16 @@ Effect.runPromise(program)
 write [4,5,6]
 write [7]`,
       hints: [
-        "Look at the output: every element appears in up to three batches.",
-        "sliding gives a moving window. Lesson 6 has the operator for non-overlapping groups.",
+        "Look at the output. Each element appears in up to 3 groups.",
+        "sliding gives a moving window. Lesson 6 has the function for groups that do not overlap.",
         "Replace Stream.sliding(3) with Stream.grouped(3)."
       ],
-      explanation: `\`sliding(n)\` emits a window of the last \`n\` elements at every step, which is what you want for moving averages and nothing else. \`grouped(n)\` cuts the stream into consecutive pieces of \`n\`, with a shorter final piece. Both return arrays, so the type checker could not tell them apart; only the output did.`
+      explanation: `\`sliding(n)\` emits a window of the last \`n\` elements at each step. Use it for moving averages only. \`grouped(n)\` cuts the stream into consecutive groups of \`n\` elements. The last group can be shorter. Both functions return arrays, so the type checker cannot see the difference. Only the output shows the difference.`
     },
     {
       id: "stream-c3",
       title: "map or mapEffect?",
-      task: `\`lookupPrice\` returns an Effect. The pipeline should print the total \`60\`, but it does not compile. Fix the pipeline so the prices are plain numbers before they are summed.`,
+      task: `\`lookupPrice\` returns an effect. The pipeline must print the total \`60\`, but it does not compile. Change the pipeline so that the prices are plain numbers before the sum.`,
       code: `import { Effect, Stream } from "effect"
 
 const prices: Record<string, number> = { apple: 10, pear: 20, fig: 30 }
@@ -537,16 +574,16 @@ Effect.runPromise(program).then((total) => console.log(total))
 `,
       expectedOutput: `60`,
       hints: [
-        "What is the element type after the map step: a number, or an Effect of a number?",
-        "The same map versus andThen problem from Getting Started, now for streams.",
-        "Use Stream.mapEffect for a function that returns an Effect."
+        "What is the element type after the map step: a number, or an effect of a number?",
+        "This is the map and andThen problem from Getting Started, now for streams.",
+        "Use Stream.mapEffect for a function that returns an effect."
       ],
-      explanation: `\`Stream.map\` wraps whatever the function returns, so the stream became a \`Stream<Effect<number>>\` and \`total + price\` tried to add an Effect to a number. \`Stream.mapEffect\` runs the Effect for each element and emits its result, giving a \`Stream<number>\`. It is also where you would add \`{ concurrency: n }\` if the lookup were slow.`
+      explanation: `\`Stream.map\` puts the return value of the function into the stream without change. The stream became a \`Stream<Effect<number>>\`, and \`total + price\` tried to add an effect to a number. \`Stream.mapEffect\` runs the effect for each element and emits the result. The stream is then a \`Stream<number>\`. \`mapEffect\` is also the place for \`{ concurrency: n }\` when the lookup is slow.`
     },
     {
       id: "stream-c4",
       title: "take in the wrong place",
-      task: `We want the first four multiples of 7 from the naturals. The program prints fewer. Fix the pipeline so it prints \`[ 0, 7, 14, 21 ]\`. Keep every operator; only their order is wrong.`,
+      task: `We want the first 4 multiples of 7 from the natural numbers. The program prints fewer. Change the pipeline so that it prints \`[ 0, 7, 14, 21 ]\`. Keep each function. Only the order is wrong.`,
       code: `import { Effect, Stream } from "effect"
 
 const program = Stream.iterate(0, (n) => n + 1).pipe(
@@ -569,16 +606,16 @@ Effect.runPromise(program).then((xs) => console.log(xs))
 `,
       expectedOutput: `[ 0, 7, 14, 21 ]`,
       hints: [
-        "Which four numbers reach the filter right now?",
-        "take limits whatever is above it in the pipe. You want to limit the multiples, not the naturals.",
-        "Swap the take and the filter."
+        "Which 4 numbers reach the filter now?",
+        "take limits the stream above it in the pipe. You want to limit the multiples, not the natural numbers.",
+        "Exchange the take and the filter."
       ],
-      explanation: `Operators apply in pipe order. \`take(4)\` first lets through \`0, 1, 2, 3\` and ends the stream; the filter then sees only those. Filter first and \`take(4)\` counts multiples of 7, pulling as many naturals as it needs and stopping after the fourth match. Because pulling is lazy, the infinite source is still safe: it is only asked for 22 numbers.`
+      explanation: `The functions apply in pipe order. \`take(4)\` first lets \`0, 1, 2, 3\` through and then ends the stream. The filter sees only these numbers. When the filter comes first, \`take(4)\` counts multiples of 7. It pulls as many natural numbers as it needs and stops after the fourth match. The pull is lazy, so the infinite source is still safe. The stream asks it for 22 numbers only.`
     },
     {
       id: "stream-c5",
-      title: "runFold wants a fresh start",
-      task: `The word counter does not compile. Fix the call to \`runFold\` so it prints \`{"a":2,"b":1}\`.`,
+      title: "runFold needs a new start",
+      task: `The word counter does not compile. Change the call to \`runFold\` so that it prints \`{"a":2,"b":1}\`.`,
       code: `import { Effect, Stream } from "effect"
 
 const words = Stream.make("a", "b", "a")
@@ -603,16 +640,16 @@ Effect.runPromise(program).then((counts) => console.log(JSON.stringify(counts)))
 `,
       expectedOutput: `{"a":2,"b":1}`,
       hints: [
-        "Read the type error on the second argument: what does runFold expect there?",
-        "Lesson 3: the initial value is given as a function so every run starts from a fresh value.",
+        "Read the type error on the second argument. What does runFold expect there?",
+        "Lesson 3: the initial value is a function, so each run starts with a new value.",
         "Change the second argument to () => ({}) as Record<string, number>."
       ],
-      explanation: `\`runFold\` takes the initial accumulator as a function \`() => init\`. This looks like ceremony until you remember that a stream is a description you can run many times. With a plain \`{}\` every run would share and mutate the same object, and the second run would start with the first run's counts. The lazy form gives each run its own empty object. The same rule applies to \`Sink.reduce\` in the next section.`
+      explanation: `\`runFold\` takes the initial accumulator as a function \`() => init\`. This is necessary because a stream is a description that you can run many times. With a plain \`{}\`, each run changes the same object. The second run then starts with the counts of the first run. The function form gives each run its own empty object. The same rule applies to \`Sink.reduce\` in the next section.`
     },
     {
       id: "stream-c6",
       title: "The tag that does not exist",
-      task: `The stream fails with a \`ParseError\` halfway. The recovery is in place but the program does not compile. Fix it so it prints \`[ 1, 2, -1 ]\`.`,
+      task: `The stream fails with a \`ParseError\` in the middle. The catch function is in place, but the program does not compile. Change it so that it prints \`[ 1, 2, -1 ]\`.`,
       code: `import { Effect, Schema, Stream } from "effect"
 
 class ParseError extends Schema.TaggedError<ParseError>()("ParseError", { input: Schema.String }) {}
@@ -645,16 +682,16 @@ Effect.runPromise(program).then((xs) => console.log(xs))
 `,
       expectedOutput: `[ 1, 2, -1 ]`,
       hints: [
-        "The type error lists the tags that are actually in the stream's error type.",
-        "Compare the string in catchTag with the tag given to Schema.TaggedError.",
+        "The type error lists the tags that exist in the error type of the stream.",
+        "Compare the string in catchTag with the tag in Schema.TaggedError.",
         "Change \"ParseFailure\" to \"ParseError\"."
       ],
-      explanation: `\`catchTag\` only accepts tags that exist in the stream's \`E\`. A typo would silently catch nothing in a plain \`try/catch\` with \`if (e.name === ...)\`; here the compiler refuses it, because the set of possible errors is known from the type. Once the tag matches, \`ParseError\` is removed from \`E\` and the stream's error type becomes \`never\`.`
+      explanation: `\`catchTag\` accepts only the tags that exist in the \`E\` of the stream. In a plain \`try/catch\` with \`if (e.name === ...)\`, a typo catches nothing and gives no warning. Here the compiler rejects the typo, because the type knows the set of possible errors. When the tag matches, \`catchTag\` removes \`ParseError\` from \`E\`. The error type of the stream becomes \`never\`.`
     },
     {
       id: "stream-c7",
-      title: "The stream that claims it cannot fail",
-      task: `\`parseAll\` is annotated as a stream that cannot fail, but a line that is not a number makes it fail with a string. The data below happens to be clean, so the output is right, yet the program does not compile. Make the annotation true by handling the error inside \`parseAll\`: on a bad line the stream should end, emitting nothing more. Do not change the annotation.`,
+      title: "The stream that says it cannot fail",
+      task: `The annotation of \`parseAll\` says that the stream cannot fail. But a line that is not a number makes the stream fail with a string. The data below is clean, so the output is correct. The program still does not compile. Make the annotation true: catch the error inside \`parseAll\`. On a bad line, the stream must end and emit nothing more. Do not change the annotation.`,
       code: `import { Effect, Stream } from "effect"
 
 const parseNumber = (line: string) =>
@@ -697,10 +734,10 @@ Effect.runPromise(Stream.runCollect(parseAll(["10", "20", "30"]))).then((xs) => 
       expectedOutput: `[ 10, 20, 30 ]`,
       hints: [
         "Stream.Stream<number> is short for Stream<number, never, never>. Which step adds a string to the error slot?",
-        "Lesson 7: a handler on a stream returns a stream that continues from the failure. Which stream emits nothing?",
+        "Lesson 7: a catch function on a stream returns a stream that continues after the failure. Which stream emits nothing?",
         "Add Stream.catch(() => Stream.empty) after the mapEffect."
       ],
-      explanation: `This bug is invisible at runtime with clean input: the program prints the right answer. The compiler still rejects it, because \`Effect.try\` put \`string\` into the error channel and the annotation promised \`never\`. Handling the error with \`Stream.catch\` removes it from \`E\` and makes the promise true, and it forces you to decide now what a bad line means (here: stop quietly). Without types, that decision would be made by whichever caller crashed first.`
+      explanation: `This error is not visible at run time with clean input. The program prints the correct result. The compiler still rejects the program, because \`Effect.try\` put \`string\` into the error channel and the annotation promised \`never\`. \`Stream.catch\` removes the error from \`E\` and makes the annotation true. It also makes you decide now what a bad line means. Here, the stream stops. Without types, the first caller that crashes makes this decision.`
     }
   ],
   problems: [
@@ -708,12 +745,12 @@ Effect.runPromise(Stream.runCollect(parseAll(["10", "20", "30"]))).then((xs) => 
       id: "stream-p1",
       title: "Log line pipeline",
       spec: `
-You receive raw log lines. Build a stream pipeline that parses, filters and counts them.
+You receive raw log lines. Build a stream pipeline that parses, filters and counts the lines.
 
-1. \`parse(line)\` splits on the first space into \`{ level, message }\`. A line whose level is not \`INFO\`, \`WARN\` or \`ERROR\` is malformed.
-2. Use \`Stream.flatMap\` so malformed lines are dropped (\`Stream.empty\`) and good lines pass through.
-3. Print \`alert: <message>\` for every \`ERROR\` line using \`Stream.tap\`, as they pass.
-4. Count lines per level with \`Stream.runFold\` into a \`Record<string, number>\`.
+1. \`parse(line)\` splits the line at the first space into \`{ level, message }\`. A line with a level other than \`INFO\`, \`WARN\` or \`ERROR\` is malformed.
+2. Use \`Stream.flatMap\` to remove malformed lines with \`Stream.empty\`. Good lines pass through.
+3. Use \`Stream.tap\` to print \`alert: <message>\` for each \`ERROR\` line when the line passes.
+4. Use \`Stream.runFold\` to count the lines for each level in a \`Record<string, number>\`.
 
 Exact output:
 
@@ -795,21 +832,21 @@ Effect.runPromise(program).then((counts) => console.log(JSON.stringify(counts)))
 alert: timeout
 {"INFO":2,"ERROR":2,"WARN":1}`,
       hints: [
-        "flatMap with a function returning Stream.empty or Stream.succeed(entry) is the way to emit zero or one element per input.",
-        "tap must return an Effect for every element; use Effect.void for the lines you do not want to print.",
-        "runFold replaces runCollect at the end. Remember the initial value is a function: () => ({}) as Record<string, number>."
+        "flatMap with a function that returns Stream.empty or Stream.succeed(entry) emits 0 or 1 element for each input element.",
+        "tap must return an effect for each element. Use Effect.void for the lines that you do not print.",
+        "runFold replaces runCollect at the end. The initial value is a function: () => ({}) as Record<string, number>."
       ]
     },
     {
       id: "stream-p2",
       title: "Paginated API fetcher",
       spec: `
-A fake API returns users one page at a time. \`api.page(cursor)\` is given: it returns a Promise of \`{ users, next }\` where \`next\` is the next cursor or \`null\` on the last page. It also increments \`api.calls\`.
+A test API returns users 1 page at a time. \`api.page(cursor)\` is given. It returns a Promise of \`{ users, next }\`. \`next\` is the next cursor, or \`null\` on the last page. Each call increments \`api.calls\`.
 
-1. Write \`fetchPage(cursor)\` that wraps \`api.page\` in \`Effect.promise\` and returns the \`[users, Option<cursor>]\` pair that \`Stream.paginate\` needs.
+1. Write \`fetchPage(cursor)\`. It puts \`api.page\` in \`Effect.promise\` and returns the pair \`[users, Option<cursor>]\` that \`Stream.paginate\` needs.
 2. \`allUsers\` is \`Stream.paginate(0, fetchPage)\`.
-3. Print the first three user names by taking three and collecting, then print how many API calls that took.
-4. Reset \`api.calls\` to 0, print the count of all users using \`Stream.runCount\`, then print the calls again.
+3. Take 3 users, collect them, and print their names. Then print the number of API calls.
+4. Set \`api.calls\` to 0. Print the number of all users with \`Stream.runCount\`. Then print the number of API calls again.
 
 Exact output:
 
@@ -878,21 +915,21 @@ calls 2
 total users 5
 calls 3`,
       hints: [
-        "Stream.paginate wants the step to return an Effect of [items, Option<nextCursor>]. Option.fromNullOr turns number | null into an Option.",
-        "Wrap the Promise with Effect.promise (it cannot reject here) and Effect.map to reshape the result.",
-        "Taking three items needs pages 0 and 1 only. That is the laziness from lesson 4, and it is why the first calls count is 2."
+        "Stream.paginate expects a step function that returns an effect of [elements, Option<nextCursor>]. Option.fromNullOr changes number | null into an Option.",
+        "Put the Promise in Effect.promise (it cannot reject here). Use Effect.map to change the shape of the result.",
+        "3 users need pages 0 and 1 only. This is the laziness from lesson 4. It is the reason why the first call count is 2."
       ]
     },
     {
       id: "stream-p3",
       title: "Moving average with alerts",
       spec: `
-Temperature readings arrive as a stream. Compute a moving average over a window of three readings and alert when it crosses a threshold.
+Temperature readings arrive as a stream. Compute a moving average over a window of 3 readings. Print an alert when the average is above a limit.
 
 1. \`readings\` is \`Stream.make(20, 22, 27, 31, 33, 28, 24)\`.
-2. Use \`Stream.sliding(3)\` to get windows, then \`Stream.map\` to their average. Format each average with \`toFixed(1)\`.
-3. Use \`Stream.tap\` to print \`ALERT <average>\` whenever an average is above \`29\`.
-4. Finish with \`Stream.runForEach\` printing \`avg <average>\` for every window.
+2. Use \`Stream.sliding(3)\` to get the windows. Use \`Stream.map\` to change each window into its average. Format each average with \`toFixed(1)\`.
+3. Use \`Stream.tap\` to print \`ALERT <average>\` when an average is above \`29\`.
+4. End with \`Stream.runForEach\`. Print \`avg <average>\` for each window.
 
 Exact output:
 
@@ -946,40 +983,40 @@ ALERT 30.7
 avg 30.7
 avg 28.3`,
       hints: [
-        "sliding(3) emits an array for every position once three readings are available: 7 readings give 5 windows.",
-        "tap runs before runForEach for the same element, which is why ALERT lines come before their avg line.",
-        "runForEach replaces runDrain; it is the runner that does an Effect per element."
+        "sliding(3) emits an array for each position after 3 readings are available. 7 readings give 5 windows.",
+        "tap runs before runForEach for the same element. This is the reason why each ALERT line comes before its avg line.",
+        "runForEach replaces runDrain. It is the run function that does an effect for each element."
       ]
     }
   ],
   recall: [
     {
-      q: "What would the type of `Stream.runCollect(Stream.make(1, 2, 3))` be?",
-      a: "`Effect<Array<number>, never, never>`. Every `run` function turns a Stream into an Effect; you still need `yield*` or `Effect.runPromise` to get the array."
+      q: "What is the type of `Stream.runCollect(Stream.make(1, 2, 3))`?",
+      a: "`Effect<Array<number>, never, never>`. Each run function changes a stream into an effect. You must use `yield*` or `Effect.runPromise` to get the array."
     },
     {
-      q: "What happens if you `runCollect` an infinite stream such as `Stream.iterate(0, n => n + 1)` without a `take`?",
-      a: "It never finishes. The consumer keeps pulling and the producer always has more. Every infinite stream needs `take`, `takeWhile`, or a runner that stops early such as `runHead`."
+      q: "What happens when you `runCollect` an infinite stream, for example `Stream.iterate(0, n => n + 1)`, without a `take`?",
+      a: "The run never ends. The consumer pulls again and again, and the producer always has more elements. Each infinite stream must have a `take`, a `takeWhile`, or a run function that stops early, for example `runHead`."
     },
     {
-      q: "Which function would you reach for to call an API once per element, three calls at a time, keeping the output order?",
-      a: "`Stream.mapEffect(f, { concurrency: 3 })`. It runs the Effect per element with bounded concurrency and emits results in input order. Add `unordered: true` if order does not matter."
+      q: "Which function do you use to call an API once for each element, with 3 calls at the same time, and keep the output order?",
+      a: "`Stream.mapEffect(f, { concurrency: 3 })`. It runs the effect for each element with a concurrency limit and emits the results in the input order. Add `unordered: true` when the order is not important."
     },
     {
-      q: "Why does `Stream.runFold` take `() => 0` instead of `0`?",
-      a: "Because a stream can be run many times, and the initial value must be fresh each run. With a mutable initial value such as `{}` or `[]`, a plain value would be shared across runs."
+      q: "Why does `Stream.runFold` take `() => 0` and not `0`?",
+      a: "You can run a stream many times, and each run must start with a new initial value. With a mutable initial value such as `{}` or `[]`, a plain value is shared between the runs."
     },
     {
-      q: "What does 'pull-based' buy you?",
-      a: "Nothing is produced before it is asked for. That means backpressure (a slow consumer is not flooded), laziness (only the pages you `take` are fetched), and safe infinite sources."
+      q: "What does a pull-based stream give you?",
+      a: "The producer emits nothing before the consumer asks. This gives backpressure (a slow consumer does not receive too many elements), laziness (the stream fetches only the pages that you `take`), and safe infinite sources."
     },
     {
-      q: "You have a paginated API where each call returns items and a next cursor. Which constructor?",
-      a: "`Stream.paginate(firstCursor, fetch)` where `fetch` returns an Effect of `[items, Option<nextCursor>]`. `Option.none()` ends the stream."
+      q: "You have a paginated API. Each call returns elements and a next cursor. Which constructor do you use?",
+      a: "`Stream.paginate(firstCursor, fetch)`. `fetch` returns an effect of `[elements, Option<nextCursor>]`. `Option.none()` ends the stream."
     },
     {
       q: "A stream fails in the middle. What does `Stream.catchTag(\"Tag\", (e) => Stream.make(x))` do with the elements after the failure?",
-      a: "They are gone. The failure ends the original stream, and the handler's stream continues from that point. For per-element recovery, catch inside the `mapEffect` function instead so the stream never fails."
+      a: "They are lost. The failure ends the original stream, and the replacement stream continues from that point. For recovery of each element, catch the error inside the `mapEffect` function. The stream then never fails."
     }
   ]
 }

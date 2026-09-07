@@ -1,9 +1,23 @@
 import path from "node:path"
 import { check, warmup, ROOT } from "./lib/run.ts"
-import { loadSections } from "./content/index.ts"
+import { readdirSync, statSync } from "node:fs"
 
 const PORT = Number(process.env.PORT ?? 4321)
 const PUBLIC = path.join(ROOT, "public")
+
+// Content is loaded in a child process so edits to content/sections/*.ts are picked up
+// without a restart (Bun caches dynamic imports in-process). Cached by newest mtime.
+const SECTIONS_DIR = path.join(ROOT, "content", "sections")
+let contentCache: { stamp: number; json: string } | null = null
+async function contentJson(): Promise<string> {
+  const stamp = Math.max(...readdirSync(SECTIONS_DIR).map((f) => statSync(path.join(SECTIONS_DIR, f)).mtimeMs))
+  if (contentCache && contentCache.stamp === stamp) return contentCache.json
+  const proc = Bun.spawn(["bun", "run", path.join(ROOT, "scripts", "dump-content.ts")], { cwd: ROOT, stdout: "pipe", stderr: "pipe" })
+  const [json, err, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited])
+  if (code !== 0) throw new Error("content failed to load:\n" + err)
+  contentCache = { stamp, json }
+  return json
+}
 
 console.log("warming up type checker...")
 warmup()
@@ -14,9 +28,7 @@ Bun.serve({
   async fetch(req) {
     const url = new URL(req.url)
     if (url.pathname === "/api/content") {
-      // reload on every request so content edits show up without restarting
-      const sections = await loadSections()
-      return Response.json(sections)
+      return new Response(await contentJson(), { headers: { "content-type": "application/json" } })
     }
     if (url.pathname === "/api/run" && req.method === "POST") {
       const { code } = (await req.json()) as { code: string }

@@ -6,7 +6,7 @@ const section: Section = {
   order: 4,
   summary: "Scopes and finalizers: closing is attached to acquiring, and the runtime guarantees it on success, failure, and interruption.",
   intro: `
-**The problem.** Anything you open must be closed: files, sockets, database connections, locks, temp directories. Plain TypeScript gives you \`try\`/\`finally\`, and it looks fine for one resource:
+**The problem.** Everything that you open, you must close: files, sockets, database connections, locks, temp directories. Plain TypeScript gives you \`try\`/\`finally\`. It looks correct for 1 resource:
 
 \`\`\`ts
 async function report() {
@@ -21,31 +21,38 @@ async function report() {
 }
 \`\`\`
 
-Three holes. The second \`open\` sits outside the \`try\`, so a failure there leaks the first resource. The \`finally\` block is a hand-maintained list that every caller of \`connect\` has to repeat, in the right order. And a Promise cannot be cancelled: if a timeout gives up on \`report()\`, the function keeps running with no way to tell it to clean up now. Nothing in the signature \`report(): Promise<void>\` says a resource is involved at all.
+This code has 3 problems. The second \`open\` is outside the \`try\`. If it fails, the first resource stays open. The \`finally\` block is a manual list. Every caller of \`connect\` must repeat it, in the correct order. And a Promise cannot be cancelled. If a timeout stops the wait for \`report()\`, the function continues to run, and you cannot tell it to clean up now. The signature \`report(): Promise<void>\` does not say that a resource is involved.
 
 ### The shift
 
-Today you think of cleanup as **something to remember at every use site**. Effect asks you to think of it as **part of the acquisition**. \`Effect.acquireRelease(open, close)\` pairs the two once, where the resource is defined. Using the resource adds a requirement, \`Scope\`, to the type, so the compiler knows a cleanup is pending. \`Effect.scoped\` marks the region where the resource lives; when that region ends, for any reason, the runtime runs every registered finalizer in reverse order and hands each one the outcome.
+Today you think of cleanup as **a step to remember at every use site**. Effect asks you to think of it as **part of the acquisition**. \`Effect.acquireRelease(open, close)\` pairs the 2 steps once, where you define the resource. When you use the resource, the type gets a requirement, \`Scope\`. A scope is a container for the cleanups that must still run. So the compiler knows that a cleanup must still run. \`Effect.scoped\` marks the region where the resource lives. When that region ends, for any reason, the runtime runs every registered finalizer in reverse order, and gives each one the outcome.
 
-The payoff is that resource safety stops depending on discipline. A function that acquires three resources and fails on the fourth line closes exactly the three it opened. A fiber interrupted by a timeout still closes its files. A database connection opened by a Layer is closed when the application shuts down. You write the close once, and the runtime carries the guarantee.
+The result: resource safety does not depend on discipline. A function that acquires 3 resources and fails on the fourth line closes exactly the 3 resources that it opened. When a timeout interrupts a fiber, the fiber still closes its files. A layer that opens a database connection closes it when the application stops. You write the close once. The runtime gives the guarantee.
 
 | | \`try\`/\`finally\` | Effect |
 |---|---|---|
-| Where the cleanup lives | At every call site | Next to the acquire, once |
-| Two resources | Nested try blocks, or a manual list | Two \`yield*\`, released in reverse automatically |
-| Acquire fails halfway | Earlier resources leak unless you nest carefully | Only what was acquired is released |
-| Cancellation | Not possible for a Promise | Interruption runs finalizers |
-| Cleanup knows the outcome | No, \`finally\` is blind | Yes, the finalizer receives the \`Exit\` |
+| Where the cleanup is | At every call site | Next to the acquire, once |
+| 2 resources | Nested try blocks, or a manual list | 2 \`yield*\`, released in reverse order automatically |
+| Acquire fails after the first resource | Earlier resources stay open unless you nest carefully | Effect releases only what it acquired |
+| Cancellation | Not possible for a Promise | An interrupt runs the finalizers |
+| Cleanup knows the outcome | No, \`finally\` sees nothing | Yes, the finalizer receives the \`Exit\` |
 | Visible in the type | No | Yes, \`Scope\` in \`R\` until \`Effect.scoped\` |
 
-In this section you will pair acquire with release, see the reverse order, read the \`Exit\` inside a finalizer, use the short form for the simple case, watch interruption clean up, and attach a resource to a Layer.
+In this section, you:
+
+- pair acquire with release
+- see the reverse order of release
+- read the \`Exit\` inside a finalizer
+- use the short form for the simple case
+- see that an interrupt runs the finalizers
+- attach a resource to a layer
 `,
   lessons: [
     {
       id: "resource-management-l1",
       title: "Acquire and release, together",
       explain: `
-Start with the leak. In plain TypeScript the close is separate from the open, so the two drift apart:
+Start with the problem. In plain TypeScript, the close is separate from the open. Nothing connects the 2 steps:
 
 \`\`\`ts
 const file = await openFile("a.txt")
@@ -53,9 +60,9 @@ const data = await read(file)          // throws? file is never closed
 await file.close()
 \`\`\`
 
-\`Effect.acquireRelease(acquire, release)\` glues them together into one value. Yielding it gives you the resource *and* registers the release with the current **Scope**, a container of pending cleanups. That is why the type of \`openFile\` ends in \`Scope\`: it means "a cleanup is waiting somewhere."
+\`Effect.acquireRelease(acquire, release)\` connects the 2 steps into 1 value. When you \`yield*\` this value, you get the resource *and* Effect registers the release with the current **scope**. A scope is a container for the cleanups that must still run. This is why the type of \`openFile\` ends in \`Scope\`. It means "a cleanup must still run somewhere."
 
-\`Effect.scoped\` creates the scope, runs the effect inside it, then closes the scope, which runs the release. It also removes \`Scope\` from \`R\`. Without it the program does not compile, because nobody has promised to close what was opened.
+\`Effect.scoped\` makes the scope, runs the effect inside it, then closes the scope. When the scope closes, the release runs. \`Effect.scoped\` also removes \`Scope\` from \`R\`. Without it, the program does not compile, because no code has agreed to close the resource.
 `,
       code: `import { Effect } from "effect"
 
@@ -89,17 +96,17 @@ console.log("result", result)
 reading a.txt
 close a.txt
 result 5`,
-      after: `Notice "close" prints before "result": the scope closes when \`program\` finishes, before the value reaches \`runSync\`. Try removing \`Effect.scoped\`: the compiler says \`Type 'Scope' is not assignable to type 'never'\`. The pending cleanup is visible in the type until something promises to run it.`
+      after: `Note that "close" prints before "result". The scope closes when \`program\` finishes, before the value reaches \`runSync\`. Remove \`Effect.scoped\`. The compiler reports \`Type 'Scope' is not assignable to type 'never'\`. The cleanup that must still run is visible in the type until some code agrees to run it.`
     },
     {
       id: "resource-management-l2",
       title: "Finalizers run in reverse",
       explain: `
-A scope is a stack. Each \`acquireRelease\` pushes a release onto it, and closing the scope pops them off, so the last thing opened is the first thing closed. This is the order you would write by hand in a careful \`finally\` block, and here it is automatic.
+A scope is a stack. Each \`acquireRelease\` pushes a release onto the stack. When the scope closes, it pops the releases off. So the last resource opened is the first resource closed. This is the order that you write by hand in a careful \`finally\` block. Here it is automatic.
 
-\`Effect.addFinalizer\` pushes cleanup onto the scope without a resource attached. Use it for "when this region ends, also do X": flush a buffer, log a summary, delete a temp directory. It is the lowest-level piece; \`acquireRelease\` is built on the same idea.
+\`Effect.addFinalizer\` pushes a cleanup onto the scope without a resource. Use it for "when this region ends, also do X": flush a buffer, log a summary, remove a temp directory. It is the lowest-level function. \`acquireRelease\` uses the same mechanism.
 
-| Function | Pushes onto the scope | Gives you back |
+| Function | Pushes onto the scope | Returns |
 |---|---|---|
 | \`Effect.acquireRelease(acquire, release)\` | \`release(resource, exit)\` | The resource |
 | \`Effect.addFinalizer((exit) => cleanup)\` | \`cleanup\` | Nothing |
@@ -136,25 +143,25 @@ flush metrics
 close log file
 close cache
 close database`,
-      after: `"flush metrics" was added last, so it runs first. Reverse order matters when resources depend on each other: the cache may need the database to flush, so the cache must close first. You never wrote that order; it came from the order of acquisition.`
+      after: `"flush metrics" was added last, so it runs first. Reverse order matters when resources depend on each other. For example, the cache can need the database to flush, so the cache must close first. You did not write that order. It comes from the order of acquisition.`
     },
     {
       id: "resource-management-l3",
       title: "The finalizer sees how it ended: Exit",
       explain: `
-A \`finally\` block is blind. It does not know whether the work succeeded or blew up, so "commit on success, roll back on failure" needs a flag variable. Effect finalizers receive the **Exit**: a plain value that is \`Success\` with a \`value\`, or \`Failure\` with a \`cause\`. The release function of \`acquireRelease\` gets it as its second argument.
+A \`finally\` block sees nothing. It does not know if the work succeeded or failed. So "commit on success, roll back on failure" needs a flag variable. Effect finalizers receive the **Exit**. An Exit is a plain value that is \`Success\` with a \`value\`, or \`Failure\` with a \`cause\`. The release function of \`acquireRelease\` receives it as its second argument.
 
-Sometimes you do not have a resource, only one effect that needs cleanup attached. Effect has a small family for that. Pick by what the cleanup needs to know:
+Sometimes you do not have a resource, only 1 effect that needs a cleanup. Effect has a small group of functions for that. Select one by what the cleanup must know:
 
 | Function | Runs when | Sees | Use when |
 |---|---|---|---|
-| \`Effect.ensuring(cleanup)\` | Always | Nothing | Cleanup is the same no matter what |
-| \`Effect.onExit((exit) => ...)\` | Always | The \`Exit\` | Cleanup depends on the outcome |
+| \`Effect.ensuring(cleanup)\` | Always | Nothing | The cleanup is the same in all cases |
+| \`Effect.onExit((exit) => ...)\` | Always | The \`Exit\` | The cleanup depends on the outcome |
 | \`Effect.onError((cause) => ...)\` | Failure or interrupt | The \`Cause\` | Only failures need work |
-| \`Effect.onInterrupt(() => ...)\` | Interrupt only | Nothing | React to cancellation |
-| \`Effect.acquireRelease\` | Scope closes | Resource and \`Exit\` | You hold a resource |
+| \`Effect.onInterrupt(() => ...)\` | Interrupt only | Nothing | React to an interrupt |
+| \`Effect.acquireRelease\` | The scope closes | The resource and the \`Exit\` | You hold a resource |
 
-All of them are guaranteed to run once the effect has started, whatever happens next.
+Effect guarantees that all of these run after the effect has started, whatever happens next.
 `,
       code: `import { Effect, Exit } from "effect"
 
@@ -197,13 +204,13 @@ begin
 insert lin in tx 1
 rollback tx 1
 second: failed`,
-      after: `The failure in the second run did not reach the finalizer as an exception; it arrived as data, \`Exit.Failure\`, and the release chose "rollback". Replace \`Effect.onExit\` with \`Effect.ensuring(Effect.sync(() => console.log(label + ": done")))\` to see the blind version.`
+      after: `The failure in the second run did not reach the finalizer as an exception. It arrived as data, \`Exit.Failure\`, and the release selected "rollback". Replace \`Effect.onExit\` with \`Effect.ensuring(Effect.sync(() => console.log(label + ": done")))\` to see the version that does not know the outcome.`
     },
     {
       id: "resource-management-l4",
       title: "acquireUseRelease for the simple case",
       explain: `
-When the whole life of a resource fits in one place, open, use, close, you do not need a scope at all. \`Effect.acquireUseRelease(acquire, use, release)\` is the direct translation of the \`try\`/\`finally\` you know, with two upgrades: the release sees the \`Exit\`, and the acquire cannot be interrupted halfway.
+When the whole life of a resource is in 1 place (open, use, close), you do not need a scope. \`Effect.acquireUseRelease(acquire, use, release)\` is the direct translation of the \`try\`/\`finally\` that you know, with 2 improvements. The release sees the \`Exit\`. And the runtime cannot interrupt the acquire before it completes.
 
 \`\`\`ts
 // Plain TypeScript
@@ -215,7 +222,7 @@ try {
 }
 \`\`\`
 
-The Effect version is the same three parts as arguments. No \`Scope\` appears in \`R\`, because the function itself closes the resource as soon as \`use\` finishes. Reach for \`acquireRelease\` plus \`scoped\` instead when the resource must outlive one function, for example when it is shared by several steps or held by a Layer.
+The Effect version has the same 3 parts as arguments. No \`Scope\` appears in \`R\`, because the function itself closes the resource as soon as \`use\` finishes. Use \`acquireRelease\` plus \`scoped\` instead when the resource must live longer than 1 function. Examples: several steps share it, or a layer holds it.
 `,
       code: `import { Effect, Exit } from "effect"
 
@@ -249,17 +256,17 @@ console.log("returned:", Effect.runSync(program))
 using connection 7 -> rows for select 1
 close connection 7 (clean)
 returned: rows for select 1`,
-      after: `Add \`yield* Effect.fail("timeout")\` inside \`use\` and run with \`runSyncExit\`: the close line prints "(after error)" and still runs. That is the guarantee \`try\`/\`finally\` gives you for one resource, now with the outcome included.`
+      after: `Add \`yield* Effect.fail("timeout")\` inside \`use\` and run with \`runSyncExit\`. The close line prints "(after error)" and still runs. This is the guarantee that \`try\`/\`finally\` gives you for 1 resource, now with the outcome included.`
     },
     {
       id: "resource-management-l5",
       title: "Interruption still releases",
       explain: `
-A Promise cannot be cancelled. If a request times out, the underlying work keeps running and keeps its connection open until it finishes on its own. Effect programs run on **fibers**, and a fiber can be interrupted: from the outside with \`Fiber.interrupt\`, or from the inside with \`Effect.interrupt\`. Either way the fiber stops at its next step, and every finalizer it registered runs.
+A Promise cannot be cancelled. If a request times out, the work continues and keeps its connection open until the work finishes on its own. Effect programs run on **fibers**. A fiber is a lightweight thread that the Effect runtime manages. You can interrupt a fiber from the outside with \`Fiber.interrupt\`, or from the inside with \`Effect.interrupt\`. In both cases, the fiber stops at its next step, and every finalizer that it registered runs.
 
-Interruption is not a failure. The \`Exit\` a finalizer receives is a \`Failure\` whose cause contains an interrupt reason. \`Exit.hasInterrupts(exit)\` tells the two apart, so a finalizer can log "cancelled" instead of "crashed".
+An interrupt is not a failure. The \`Exit\` that a finalizer receives is a \`Failure\` whose cause contains an interrupt reason. \`Exit.hasInterrupts(exit)\` tells the 2 cases apart, so a finalizer can log "cancelled" instead of "crashed".
 
-The program below shows both directions. First a job interrupts itself while holding a lock. Then the main fiber forks a second job with \`Effect.forkChild\`, waits a few milliseconds, and cancels it with \`Fiber.interrupt\`. Both locks are released.
+The program below shows both directions. First, a job interrupts itself while it holds a lock. Then the main fiber forks a second job with \`Effect.forkChild\`, waits a few milliseconds, and interrupts it with \`Fiber.interrupt\`. Both locks are released.
 `,
       code: `import { Effect, Exit, Fiber } from "effect"
 
@@ -307,15 +314,15 @@ lock B
 main: cancelling the job
 unlock B (interrupted)
 main: done`,
-      after: `\`Fiber.interrupt\` waits until the interrupted fiber has finished its finalizers, which is why "unlock B" prints before "main: done". Concurrency and timeouts are built on this: \`Effect.timeout\` is an interruption, and every resource the timed-out work held is released.`
+      after: `\`Fiber.interrupt\` waits until the interrupted fiber has finished its finalizers. This is why "unlock B" prints before "main: done". Concurrency and timeouts use this mechanism. \`Effect.timeout\` is an interrupt, and Effect releases every resource that the timed-out work held.`
     },
     {
       id: "resource-management-l6",
       title: "Scoped layers: a connection for the whole app",
       explain: `
-A database connection should be opened once when the app starts and closed once when it ends. That is a resource whose scope is the Layer. In v4 there is no separate \`Layer.scoped\`: \`Layer.effect\` already provides a scope to its build effect and removes \`Scope\` from the layer's requirements. So the recipe is \`Layer.effect\` with \`Effect.acquireRelease\` inside.
+A database connection must open once when the app starts, and close once when the app stops. That is a resource whose scope is the layer. In v4, there is no separate \`Layer.scoped\`. \`Layer.effect\` already provides a scope to its build effect and removes \`Scope\` from the requirements of the layer. So the pattern is \`Layer.effect\` with \`Effect.acquireRelease\` inside.
 
-The layer's scope stays open for as long as the program that \`Effect.provide\` wraps is running. When that program finishes, the layer is torn down and the release runs. Meanwhile, each request can open its own short-lived resources with a nested \`Effect.scoped\`; those close at the end of the request, long before the connection does.
+The scope of the layer stays open as long as the program that \`Effect.provide\` wraps runs. When that program finishes, Effect closes the layer, and the release runs. In the meantime, each request can open its own short-lived resources with a nested \`Effect.scoped\`. Those resources close at the end of the request, long before the connection closes.
 
 \`\`\`
 app scope        [ connect ......................... disconnect ]
@@ -376,14 +383,51 @@ Effect.runPromise(app.pipe(Effect.provide(DatabaseLive)))
 [req 2] close temp file
 app: all requests done
 db: disconnect`,
-      after: `"db: disconnect" comes after "app: all requests done": the layer outlives every request and closes when the provided program ends. Remove the \`Effect.scoped\` inside \`handle\` and the compiler reports \`Scope\` in \`R\` at \`runPromise\`. The per-request cleanup has to belong to someone.`
+      after: `"db: disconnect" comes after "app: all requests done". The layer lives longer than every request and closes when the provided program ends. Remove the \`Effect.scoped\` inside \`handle\`. The compiler reports \`Scope\` in \`R\` at \`runPromise\`. Some code must own the cleanup for each request.`
+    }
+  ],
+  dosAndDonts: [
+    {
+      do: "Declare the close together with the open in `Effect.acquireRelease`.",
+      dont: "Do not write the close as a normal step after the use.",
+      why: "A failure before that step skips it, and the resource stays open."
+    },
+    {
+      do: "Wrap the whole region of use in `Effect.scoped`.",
+      dont: "Do not wrap only the acquire, for example `Effect.scoped(openFile(name))`.",
+      why: "The scope closes as soon as the acquire finishes, so the next line uses a released resource."
+    },
+    {
+      do: "Put `yield*` in front of `Effect.addFinalizer(...)`.",
+      dont: "Do not call `Effect.addFinalizer(...)` on its own line without `yield*`.",
+      why: "The call only builds an effect, and an effect that does not run registers nothing."
+    },
+    {
+      do: "Give a release the error type `never`, with `Effect.ignore` or `Effect.orDie`.",
+      dont: "Do not return an effect that can fail from a release function.",
+      why: "A finalizer runs while the program already exits, so a second failure has no correct place, and the program does not compile."
+    },
+    {
+      do: "Use `Effect.onExit` when the cleanup depends on the outcome.",
+      dont: "Do not use `Effect.ensuring` with a flag variable that records success or failure.",
+      why: "`Effect.ensuring` takes a fixed effect and cannot see the `Exit`, so the flag is a manual copy of information that Effect already has."
+    },
+    {
+      do: "Acquire an application-wide resource inside `Layer.effect` with `Effect.acquireRelease`.",
+      dont: "Do not look for `Layer.scoped` in v4, and do not open the connection in each request.",
+      why: "`Layer.effect` already provides the scope, and a connection opened in each request closes at the end of that request."
+    },
+    {
+      do: "Use `Effect.acquireUseRelease` when the open, the use, and the close are in 1 place.",
+      dont: "Do not create a scope for a resource that only 1 function uses.",
+      why: "The scope adds `Scope` to `R` for no benefit, and `acquireUseRelease` closes the resource as soon as `use` finishes."
     }
   ],
   challenges: [
     {
       id: "resource-management-c1",
       title: "Nobody promised to close it",
-      task: `The program opens a file and does not compile. Something has to own the cleanup. Make it print the three lines below without changing \`openFile\` or the generator body.`,
+      task: `The program opens a file and does not compile. Some code must own the cleanup. Make the program print the 3 lines below. Do not change \`openFile\` or the generator body.`,
       code: `import { Effect } from "effect"
 
 const openFile = (name: string) =>
@@ -424,16 +468,16 @@ Effect.runSync(Effect.scoped(program))
 reading notes.txt
 close notes.txt`,
       hints: [
-        "Read the error: which type is 'not assignable to never'? That is a requirement nobody satisfied.",
-        "Lesson 1: the requirement is Scope. One function creates a scope, runs the effect, and closes it.",
+        "Read the error. Which type is 'not assignable to never'? That type is a requirement that nothing satisfied.",
+        "Lesson 1: the requirement is Scope. One function makes a scope, runs the effect, and closes the scope.",
         "Wrap it: Effect.runSync(Effect.scoped(program))."
       ],
-      explanation: `\`acquireRelease\` registers the release in the *current* scope, so anything that uses it carries \`Scope\` in \`R\`. That requirement is the compiler's way of saying "a cleanup is pending and nobody has taken responsibility." \`Effect.scoped\` takes responsibility: it creates the scope, runs the program inside, closes the scope afterwards, and removes \`Scope\` from the type. In plain TypeScript a forgotten \`finally\` is silent; here it is a compile error.`
+      explanation: `\`acquireRelease\` registers the release in the *current* scope. So each effect that uses it has \`Scope\` in \`R\`. With that requirement, the compiler says "a cleanup must still run, and no code owns it." \`Effect.scoped\` takes ownership. It makes the scope, runs the program inside, closes the scope after, and removes \`Scope\` from the type. In plain TypeScript, a missing \`finally\` causes no message. Here it is a compile error.`
     },
     {
       id: "resource-management-c2",
       title: "Closed too early",
-      task: `The file is closed before it is used. Move one call so the output is \`open\`, then \`reading\`, then \`close\`.`,
+      task: `The file closes before the program uses it. Move 1 call so that the output is \`open\`, then \`reading\`, then \`close\`.`,
       code: `import { Effect } from "effect"
 
 const openFile = (name: string) =>
@@ -474,16 +518,16 @@ Effect.runSync(program)
 reading notes.txt
 close notes.txt`,
       hints: [
-        "Effect.scoped closes the scope as soon as the effect it wraps finishes. What does it wrap right now?",
+        "Effect.scoped closes the scope as soon as the effect that it wraps finishes. What does it wrap now?",
         "The scope must be at least as large as every use of the resource.",
-        "Move Effect.scoped so it wraps the whole Effect.gen, not only openFile(...)."
+        "Move Effect.scoped so that it wraps the whole Effect.gen, not only openFile(...)."
       ],
-      explanation: `\`Effect.scoped(openFile(...))\` opened a scope, acquired the file, and closed the scope immediately, because the wrapped effect was only the acquisition. The generator then used a file that had already been released. The scope defines the lifetime, so it has to enclose every use. This is the same mistake as returning a handle out of a \`using\` block or a \`with\` statement in other languages, and it compiles fine, so keep the rule in mind: \`scoped\` goes around the region of use.`
+      explanation: `\`Effect.scoped(openFile(...))\` opened a scope, acquired the file, and closed the scope immediately, because the wrapped effect was only the acquisition. The generator then used a file that Effect had already released. The scope defines the lifetime, so it must enclose every use. This is the same error as a resource returned out of a \`using\` block or a \`with\` statement in other languages. It compiles without errors, so keep this rule in mind: \`scoped\` goes around the region of use.`
     },
     {
       id: "resource-management-c3",
       title: "The finalizer that was never added",
-      task: `The program is supposed to print \`cleanup\` after \`work\`, but only \`work\` appears. It compiles without errors. Find the missing keyword.`,
+      task: `The program must print \`cleanup\` after \`work\`, but only \`work\` appears. It compiles without errors. Find the missing keyword.`,
       code: `import { Effect } from "effect"
 
 const program = Effect.scoped(Effect.gen(function* () {
@@ -505,16 +549,16 @@ Effect.runSync(program)
       expectedOutput: `work
 cleanup`,
       hints: [
-        "Effect.addFinalizer returns an Effect. An Effect that is not run does nothing.",
-        "Getting Started: what keyword runs an Effect inside Effect.gen?",
+        "Effect.addFinalizer returns an effect. An effect that does not run does nothing.",
+        "Getting Started: which keyword runs an effect inside Effect.gen?",
         "Put yield* in front of Effect.addFinalizer(...)."
       ],
-      explanation: `\`Effect.addFinalizer(...)\` builds a description of "register this cleanup." Like every Effect, it does nothing until it runs, and inside a generator that means \`yield*\`. This one is dangerous precisely because TypeScript accepts an unused expression on its own line, so no error appears. When an Effect seems to have no effect, check for a missing \`yield*\` first.`
+      explanation: `\`Effect.addFinalizer(...)\` builds a description: "register this cleanup." Like every effect, it does nothing until it runs. Inside a generator, that means \`yield*\`. This error is dangerous because TypeScript accepts an unused expression on its own line, so no error appears. When an effect seems to do nothing, check for a missing \`yield*\` first.`
     },
     {
       id: "resource-management-c4",
       title: "Close it on the way out too",
-      task: `When the write fails, the file is never closed. Restructure so the close is guaranteed and the program prints \`open\`, \`close\`, then \`failed: disk full\`, in that order. Keep the \`Effect.fail\`.`,
+      task: `When the write fails, the file never closes. Change the structure so that the close is guaranteed. The program must print \`open\`, \`close\`, then \`failed: disk full\`, in that order. Keep the \`Effect.fail\`.`,
       code: `import { Cause, Effect, Exit } from "effect"
 
 const open = (name: string) =>
@@ -560,16 +604,16 @@ if (Exit.isFailure(exit)) {
 close report.csv
 failed: disk full`,
       hints: [
-        "yield* Effect.fail stops the generator. Every line after it, including the close, is skipped.",
-        "Lesson 1: attach the close to the open so the scope runs it no matter how the generator ends.",
-        "const file = yield* Effect.acquireRelease(open(\"report.csv\"), close), and delete the manual close line."
+        "yield* Effect.fail stops the generator. The generator skips every line after it, and that includes the close.",
+        "Lesson 1: attach the close to the open. Then the scope runs the close in every case, whatever way the generator ends.",
+        "const file = yield* Effect.acquireRelease(open(\"report.csv\"), close), and remove the manual close line."
       ],
-      explanation: `A close written as a normal step only runs when control reaches it, and a failure never gets there. \`Effect.acquireRelease(open, close)\` registers \`close\` in the scope at the moment the file is opened, so the scope runs it when the generator exits by failure. The plain-TypeScript equivalent is moving \`close\` into a \`finally\`, except this time the pairing lives with the resource, and every caller inherits it.`
+      explanation: `A close written as a normal step runs only when control reaches it. A failure never gets there. \`Effect.acquireRelease(open, close)\` registers \`close\` in the scope at the moment the file opens. So the scope runs \`close\` when the generator exits with a failure. The plain-TypeScript equivalent moves \`close\` into a \`finally\`. Here, the pair lives with the resource, and every caller gets it.`
     },
     {
       id: "resource-management-c5",
       title: "A release that can fail",
-      task: `Closing a socket may throw, so the release wraps it in \`Effect.try\`. Now the program does not compile: a finalizer is not allowed to fail. Fix the release so the code compiles and prints \`open\`, \`send\`, \`close\`.`,
+      task: `A socket close can throw, so the release wraps it in \`Effect.try\`. Now the program does not compile: a finalizer is not permitted to fail. Correct the release so that the code compiles and prints \`open\`, \`send\`, \`close\`.`,
       code: `import { Effect } from "effect"
 
 const socket = {
@@ -616,16 +660,16 @@ Effect.runSync(program)
 send packet
 close socket`,
       hints: [
-        "Read the error: the release must be an Effect whose error type is never. Effect.try produces a string error.",
-        "Decide what a failed close should mean. Ignoring it and moving on is a reasonable choice for cleanup.",
-        "Append .pipe(Effect.ignore) to the Effect.try (or Effect.orDie if a failed close should be treated as a bug)."
+        "Read the error: the release must be an effect whose error type is never. Effect.try produces a string error.",
+        "Decide what a failed close means. For a cleanup, to ignore it and continue is a reasonable choice.",
+        "Add .pipe(Effect.ignore) to the Effect.try. Use Effect.orDie instead if a failed close must count as a bug."
       ],
-      explanation: `The release type is \`Effect<unknown, never, R>\`: it may not fail. That is deliberate. A finalizer runs while the program is already on its way out, possibly because of another error, and there is no sensible place for a second error to go. So Effect forces you to decide up front: \`Effect.ignore\` swallows it, \`Effect.orDie\` turns it into a defect that crashes loudly. Both give the finalizer the error type \`never\`, which is what the compiler asked for.`
+      explanation: `The release type is \`Effect<unknown, never, R>\`. It must not fail. This is intentional. A finalizer runs while the program already exits, possibly because of another error, and there is no correct place for a second error. So Effect makes you decide before: \`Effect.ignore\` discards the failure, and \`Effect.orDie\` changes it into a defect that stops the program. Both give the finalizer the error type \`never\`, which the compiler asked for.`
     },
     {
       id: "resource-management-c6",
       title: "ensuring cannot see the result",
-      task: `The audit line must say \`audit: ok\` after a success and \`audit: failed\` after a failure. Right now both runs print \`audit: done\`. Change the operator so the cleanup can see the outcome.`,
+      task: `The audit line must say \`audit: ok\` after a success and \`audit: failed\` after a failure. Now both runs print \`audit: done\`. Change the operator so that the cleanup can see the outcome.`,
       code: `import { Effect, Exit } from "effect"
 
 const audited = (effect: Effect.Effect<void, string>) =>
@@ -650,11 +694,11 @@ Effect.runSyncExit(audited(Effect.fail("not saved")))
 audit: ok
 audit: failed`,
       hints: [
-        "Lesson 3's table: which function runs always and also receives the Exit?",
-        "The callback gets an Exit; Exit.isSuccess(exit) tells the two cases apart.",
+        "See the table in lesson 3: which function always runs and also receives the Exit?",
+        "The callback gets an Exit. Exit.isSuccess(exit) tells the 2 cases apart.",
         "Effect.onExit((exit) => Effect.sync(() => console.log(\"audit:\", Exit.isSuccess(exit) ? \"ok\" : \"failed\")))."
       ],
-      explanation: `\`Effect.ensuring\` takes a fixed effect, so by construction it cannot depend on the result. \`Effect.onExit\` takes a function from \`Exit\` to an effect, which runs in the same situations but can inspect the outcome. Both are guaranteed to run once the wrapped effect starts. When the cleanup is identical either way, \`ensuring\` reads better; the moment you reach for a flag variable to remember what happened, switch to \`onExit\`.`
+      explanation: `\`Effect.ensuring\` takes a fixed effect, so it cannot depend on the result. \`Effect.onExit\` takes a function from \`Exit\` to an effect. It runs in the same situations, but it can examine the outcome. Effect guarantees that both run after the wrapped effect starts. When the cleanup is identical in both cases, \`ensuring\` is easier to read. When you need a flag variable to remember what happened, change to \`onExit\`.`
     }
   ],
   problems: [
@@ -664,9 +708,9 @@ audit: failed`,
       spec: `
 Write a \`transaction\` resource and a \`withTransaction(work)\` helper.
 
-1. \`transaction\` is built with \`Effect.acquireRelease\`. Acquiring prints \`begin\` and returns \`{ id: number }\` using a module-level counter starting at 1. The release reads the \`Exit\`: it prints \`commit <id>\` on success and \`rollback <id>\` otherwise.
-2. \`withTransaction(work)\` takes a function from the transaction to an effect, runs it inside its own scope with the transaction, and returns the result. Its type must not have \`Scope\` in \`R\`.
-3. Run two orders. Order 1 inserts and succeeds. Order 2 inserts and then fails with \`"card declined"\`. Use \`Effect.runSyncExit\` and \`Cause.squash\` to print the error.
+1. Build \`transaction\` with \`Effect.acquireRelease\`. The acquire prints \`begin\` and returns \`{ id: number }\` from a module-level counter that starts at 1. The release reads the \`Exit\`. It prints \`commit <id>\` on success and \`rollback <id>\` in all other cases.
+2. \`withTransaction(work)\` takes a function from the transaction to an effect. It runs the function inside its own scope with the transaction, and returns the result. Its type must not have \`Scope\` in \`R\`.
+3. Run 2 orders. Order 1 inserts and succeeds. Order 2 inserts and then fails with \`"card declined"\`. Use \`Effect.runSyncExit\` and \`Cause.squash\` to print the error.
 
 Exact output:
 
@@ -747,20 +791,20 @@ insert order 2 in tx 2
 rollback 2
 error: card declined`,
       hints: [
-        "The release callback receives (tx, exit). Exit.isSuccess(exit) picks commit versus rollback.",
+        "The release callback receives (tx, exit). Exit.isSuccess(exit) selects commit or rollback.",
         "withTransaction wraps an Effect.gen in Effect.scoped: yield* transaction, then return yield* work(tx). Effect.scoped removes Scope from R.",
-        "Because the release runs when the scope closes, a failure inside work still reaches it, as an Exit.Failure."
+        "The release runs when the scope closes. So a failure inside work still reaches the release, as an Exit.Failure."
       ]
     },
     {
       id: "resource-management-p2",
       title: "One connection, many requests",
       spec: `
-Build a \`Database\` service whose connection lives as long as the app, and a request handler that takes a short-lived lock per request.
+Build a \`Database\` service whose connection lives as long as the app. Build a request handler that takes a short-lived lock for each request.
 
-1. \`Database\` has \`query(sql): Effect<string>\`. \`DatabaseLive\` is a \`Layer.effect\` that acquires a connection with \`Effect.acquireRelease\`: acquiring prints \`connect\`, releasing prints \`disconnect\`. \`query\` returns \`"result of <sql>"\`.
-2. \`lock(request)\` is an \`Effect.acquireRelease\` that prints \`[<request>] lock\` on acquire and \`[<request>] unlock\` on release.
-3. \`handle(request)\` runs in its own scope: takes the lock, queries \`"select <request>"\`, prints \`[<request>] <result>\`.
+1. \`Database\` has \`query(sql): Effect<string>\`. \`DatabaseLive\` is a \`Layer.effect\` that acquires a connection with \`Effect.acquireRelease\`. The acquire prints \`connect\`. The release prints \`disconnect\`. \`query\` returns \`"result of <sql>"\`.
+2. \`lock(request)\` is an \`Effect.acquireRelease\`. It prints \`[<request>] lock\` on acquire and \`[<request>] unlock\` on release.
+3. \`handle(request)\` runs in its own scope. It takes the lock, queries \`"select <request>"\`, and prints \`[<request>] <result>\`.
 4. \`app\` handles requests 1 and 2, then prints \`all done\`. Provide \`DatabaseLive\` once and run with \`Effect.runPromise\`.
 
 Exact output:
@@ -844,19 +888,19 @@ Effect.runPromise(app.pipe(Effect.provide(DatabaseLive)))
 all done
 disconnect`,
       hints: [
-        "Inside the Layer.effect build effect, yield* Effect.acquireRelease(...). Layer.effect supplies the scope, so the layer's R stays never.",
-        "Each handle(request) is Effect.scoped(Effect.gen(...)); the lock is released when that inner scope closes, not when the app ends.",
-        "The disconnect prints last because the layer's scope closes after the provided program finishes."
+        "Inside the build effect of Layer.effect, yield* Effect.acquireRelease(...). Layer.effect provides the scope, so the R of the layer stays never.",
+        "Each handle(request) is Effect.scoped(Effect.gen(...)). The lock is released when that inner scope closes, not when the app ends.",
+        "The disconnect prints last because the scope of the layer closes after the provided program finishes."
       ]
     },
     {
       id: "resource-management-p3",
       title: "Cancel a download and clean up",
       spec: `
-A download writes to a \`.part\` file. If the download is cancelled, the partial file must be removed.
+A download writes to a \`.part\` file. If the download is interrupted, the program must remove the partial file.
 
-1. \`partFile(name)\` is an \`Effect.acquireRelease\`. Acquiring prints \`create <name>.part\` and returns the path. The release reads the \`Exit\`: it prints \`remove <name>.part (cancelled)\` if \`Exit.hasInterrupts(exit)\`, otherwise \`keep <name>.part\`.
-2. \`download(name)\` is scoped: it creates the part file, prints \`downloading <name>\`, then sleeps for 1 second, then prints \`finished <name>\` (which must never appear in the output).
+1. \`partFile(name)\` is an \`Effect.acquireRelease\`. The acquire prints \`create <name>.part\` and returns the path. The release reads the \`Exit\`. It prints \`remove <name>.part (cancelled)\` if \`Exit.hasInterrupts(exit)\` is true. In all other cases, it prints \`keep <name>.part\`.
+2. \`download(name)\` is scoped. It makes the part file, prints \`downloading <name>\`, then sleeps for 1 second, then prints \`finished <name>\`. The last line must never appear in the output.
 3. \`main\` forks \`download("big.iso")\` with \`Effect.forkChild\`, sleeps 10 milliseconds, prints \`timeout, cancelling\`, interrupts the fiber with \`Fiber.interrupt\`, and prints \`main done\`.
 
 Exact output:
@@ -918,39 +962,39 @@ remove big.iso.part (cancelled)
 main done`,
       hints: [
         "Effect.forkChild returns a Fiber. Fiber.interrupt(fiber) stops it and waits for its finalizers to finish.",
-        "The release callback's second argument is the Exit. Exit.hasInterrupts(exit) is true when the fiber was interrupted.",
-        "The forked fiber runs its first steps as soon as main sleeps, which is why the two download lines appear before the timeout line."
+        "The second argument of the release callback is the Exit. Exit.hasInterrupts(exit) is true when the fiber was interrupted.",
+        "The forked fiber runs its first steps as soon as main sleeps. This is why the 2 download lines appear before the timeout line."
       ]
     }
   ],
   recall: [
     {
-      q: "Why does `try`/`finally` stop being enough once two resources are involved?",
-      a: "The second acquire either sits outside the `try` (and a failure there leaks the first resource) or inside it (and the `finally` has to check what was actually opened). The close list is maintained by hand at every call site, in reverse order, and a Promise cannot be cancelled, so a timeout leaves everything open."
+      q: "Why is `try`/`finally` not sufficient when 2 resources are involved?",
+      a: "If the second acquire is outside the `try`, a failure there leaves the first resource open. If it is inside the `try`, the `finally` must check which resources are open. You maintain the close list by hand at every call site, in reverse order. A Promise cannot be cancelled, so a timeout leaves everything open."
     },
     {
-      q: "What would the type of `Effect.acquireRelease(Effect.succeed(handle), (h) => Effect.void)` be, if `handle` is a `Handle`?",
-      a: "`Effect<Handle, never, Scope>`. The `Scope` in `R` means a release is pending and something must close the scope, usually `Effect.scoped` or a `Layer.effect`."
+      q: "What is the type of `Effect.acquireRelease(Effect.succeed(handle), (h) => Effect.void)`, if `handle` is a `Handle`?",
+      a: "`Effect<Handle, never, Scope>`. The `Scope` in `R` means that a release must still run. Some code must close the scope, usually `Effect.scoped` or a `Layer.effect`."
     },
     {
-      q: "Which function would you reach for to run a fixed cleanup after one effect no matter how it ends, and which one if the cleanup must know whether it succeeded?",
-      a: "`Effect.ensuring(cleanup)` for a fixed cleanup. `Effect.onExit((exit) => ...)` when the cleanup needs the outcome, for example commit versus rollback."
+      q: "Which function runs a fixed cleanup after 1 effect, whatever the outcome? Which function do you use if the cleanup must know if the effect succeeded?",
+      a: "`Effect.ensuring(cleanup)` for a fixed cleanup. `Effect.onExit((exit) => ...)` when the cleanup needs the outcome, for example commit or rollback."
     },
     {
-      q: "Three resources are acquired in a scope in the order A, B, C. In what order are they released?",
+      q: "A scope acquires 3 resources in the order A, B, C. In what order does it release them?",
       a: "C, B, A. The scope is a stack: the last release registered runs first. `Effect.addFinalizer` pushes onto the same stack."
     },
     {
-      q: "A fiber holding a resource is interrupted with `Fiber.interrupt`. Does the release run, and what does it see?",
-      a: "Yes. Interruption closes the fiber's scopes, so every finalizer runs. The release receives an `Exit.Failure` whose cause contains an interrupt; `Exit.hasInterrupts(exit)` returns true, which lets it tell cancellation from a crash."
+      q: "A fiber holds a resource, and `Fiber.interrupt` interrupts it. Does the release run, and what does it see?",
+      a: "Yes. The interrupt closes the scopes of the fiber, so every finalizer runs. The release receives an `Exit.Failure` whose cause contains an interrupt. `Exit.hasInterrupts(exit)` returns true, so the release can tell an interrupt from a failure."
     },
     {
-      q: "You want a database connection opened when the app starts and closed when it ends. v3 docs say `Layer.scoped`. What do you write in v4?",
-      a: "`Layer.effect(Tag, Effect.gen(function* () { const conn = yield* Effect.acquireRelease(open, close); return { ... } }))`. In v4 `Layer.effect` already provides a scope to the build effect and removes `Scope` from the layer's requirements, so there is no separate `Layer.scoped`."
+      q: "You want a database connection that opens when the app starts and closes when it stops. The v3 docs say `Layer.scoped`. What do you write in v4?",
+      a: "`Layer.effect(Tag, Effect.gen(function* () { const conn = yield* Effect.acquireRelease(open, close); return { ... } }))`. In v4, `Layer.effect` already provides a scope to the build effect and removes `Scope` from the requirements of the layer. There is no separate `Layer.scoped`."
     },
     {
-      q: "When is `Effect.acquireUseRelease` the better choice over `acquireRelease` plus `scoped`?",
-      a: "When the whole life of the resource fits in one place: open, use, close, and nothing else needs it. It closes as soon as `use` finishes and leaves no `Scope` in `R`. Use `acquireRelease` with a scope when the resource must be shared across steps or owned by a Layer."
+      q: "When is `Effect.acquireUseRelease` the better choice, compared to `acquireRelease` plus `scoped`?",
+      a: "When the whole life of the resource is in 1 place: open, use, close, and nothing else needs it. It closes the resource as soon as `use` finishes and leaves no `Scope` in `R`. Use `acquireRelease` with a scope when several steps share the resource or a layer owns it."
     }
   ]
 }

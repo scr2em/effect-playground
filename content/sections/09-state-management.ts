@@ -6,7 +6,7 @@ const section: Section = {
   order: 9,
   summary: "Ref, SynchronizedRef, SubscriptionRef, and TxRef: shared state with atomic updates instead of mutable variables.",
   intro: `
-**The problem.** A shared variable and concurrency do not mix, and the bug hides behind any \`await\`:
+**The problem.** A shared variable and concurrency do not work together. The error hides behind any \`await\`:
 
 \`\`\`ts
 let count = 0
@@ -18,34 +18,34 @@ await Promise.all(items.map(async () => {
 console.log(count)       // 1, not 100
 \`\`\`
 
-Every task read \`0\`, paused, and wrote \`1\`. Ninety-nine updates vanished, no error was thrown, and the code looks perfectly reasonable. When you then want to *react* to the count changing, you reach for an \`EventEmitter\`, and now you have a second system with its own listeners to leak and its own ordering surprises.
+Each task read \`0\`, paused, and wrote \`1\`. The program lost 99 updates. It threw no error, and the code looks correct. Later you want to react when the count changes. You add an \`EventEmitter\`. Now you have a second system, with listeners that can leak and with its own order problems.
 
 ### The shift
 
-Today you think of state as **a variable you mutate** and of change notification as **an emitter bolted on the side**. Effect asks you to think of state as **a value held in a container whose every operation is an Effect**. You do not write \`count = count + 1\`; you describe an update, \`Ref.update(count, (n) => n + 1)\`, and that update is applied as one atomic step. Read, modify, and write can no longer be pulled apart by a pause, because there is no pause inside a pure function.
+Today you think of state as a variable that you change. You think of change notification as an emitter that you add next to the variable. In Effect, state is a value inside a container. Each operation on the container is an effect. You do not write \`count = count + 1\`. You describe an update, \`Ref.update(count, (n) => n + 1)\`, and Effect applies that update as 1 atomic step. Atomic means that no other fiber can act between the read and the write. A pure function has no pause, so nothing can separate the read from the write.
 
-Because reads and updates are Effects, they compose with everything else you have learned: run them concurrently, retry them, interrupt them, scope them to a service. And when the update itself needs to be an Effect, or you need to watch changes, or you need to update several values together, there is a container built for exactly that job.
+Reads and updates are effects, so they combine with all the tools from the earlier sections. You can run them concurrently, retry them, interrupt them, and give them the lifetime of a service. Some cases need more: the update is an effect, something must react to each change, or several values must change together. Each case has its own container.
 
-| Container | Update is... | Reach for it when |
+| Container | The update is... | Use it when |
 |---|---|---|
-| \`let\` | Read, pause, write | Never for state shared across fibers |
-| \`Ref\` | A pure function, atomic | A counter, a cache, a list of recorded calls |
-| \`SynchronizedRef\` | An Effect, serialized under a lock | The new value comes from a fetch or a computation that can fail |
-| \`SubscriptionRef\` | Like \`Ref\`, plus a stream of changes | Something must react to every change: status, progress, config |
-| \`TxRef\` + \`Effect.tx\` | Several refs changed all-or-nothing | Money, inventory, anything where two values must stay consistent |
+| \`let\` | Read, pause, write | Never for state that fibers share |
+| \`Ref\` | A pure function, applied as 1 atomic step | A counter, a cache, a list of recorded calls |
+| \`SynchronizedRef\` | An effect, run under a lock | The new value comes from a fetch or from a computation that can fail |
+| \`SubscriptionRef\` | The same as \`Ref\`, plus a stream of changes | Something must react to each change: a status, a progress value, a config |
+| \`TxRef\` + \`Effect.tx\` | Several refs change together, or not at all | Money, inventory, any 2 values that must stay consistent |
 
-This section starts with the lost-update bug, fixes it with \`Ref\`, then climbs the table one row at a time.
+This section starts with the lost update error. It corrects the error with \`Ref\`. Then it goes through the table, 1 row at a time.
 `,
   lessons: [
     {
       id: "state-management-l1",
       title: "Lost updates, then Ref",
       explain: `
-The program below runs the bug from the intro first, inside Effect, so you can see that fibers have the same problem as Promises. One hundred fibers each read a plain \`let\`, pause for a millisecond, and write back. They all read \`0\`, so the final value is \`1\`.
+The program below first runs the error from the intro inside Effect. Fibers have the same problem as Promises. 100 fibers each read a plain \`let\`, pause for 1 millisecond, and write the value back. All of them read \`0\`, so the final value is \`1\`.
 
-Then the same work with a \`Ref\`. \`Ref.make(0)\` creates the container (it is an Effect, so you \`yield*\` it). \`Ref.update(ref, f)\` applies \`f\` to the current value and stores the result as one atomic step. There is no way for another fiber to sneak in between the read and the write, because from the outside there is only one operation.
+Then the program does the same work with a \`Ref\`. \`Ref.make(0)\` makes the container. It is an effect, so you \`yield*\` it. \`Ref.update(ref, f)\` applies \`f\` to the current value and stores the result as 1 atomic step. No other fiber can act between the read and the write, because from the outside there is only 1 operation.
 
-\`Ref.get\` reads the current value. Like everything else here, it is an Effect until you run it.
+\`Ref.get\` reads the current value. Like each operation here, it is an effect until you run it.
 `,
       code: `import { Effect, Ref } from "effect"
 
@@ -72,24 +72,24 @@ Effect.runPromise(program)
 `,
       expectedOutput: `let: 1
 Ref: 100`,
-      after: `The Ref version has no \`sleep\`, on purpose: \`update\` takes a plain function, so there is no place to pause between read and write. That restriction is the guarantee. Lesson 4 shows what to do when the update itself must wait for something.`
+      after: `Note: the Ref version has no \`sleep\`. That is intentional. \`update\` accepts a plain function, so there is no place for a pause between the read and the write. That limit is the guarantee. Lesson 4 shows what to do when the update itself must wait.`
     },
     {
       id: "state-management-l2",
-      title: "The Ref toolkit",
+      title: "The Ref operations",
       explain: `
-\`Ref\` has a small family of operations. They differ only in what they give back.
+\`Ref\` has a small set of operations. They differ only in the value that they return.
 
 | Operation | Does | Returns |
 |---|---|---|
-| \`Ref.get(ref)\` | Read | Current value |
-| \`Ref.set(ref, a)\` | Replace | \`void\` |
-| \`Ref.update(ref, f)\` | Apply \`f\` | \`void\` |
-| \`Ref.updateAndGet(ref, f)\` | Apply \`f\` | The **new** value |
-| \`Ref.getAndUpdate(ref, f)\` | Apply \`f\` | The **old** value |
+| \`Ref.get(ref)\` | Reads | The current value |
+| \`Ref.set(ref, a)\` | Replaces | \`void\` |
+| \`Ref.update(ref, f)\` | Applies \`f\` | \`void\` |
+| \`Ref.updateAndGet(ref, f)\` | Applies \`f\` | The **new** value |
+| \`Ref.getAndUpdate(ref, f)\` | Applies \`f\` | The **old** value |
 | \`Ref.modify(ref, f)\` | \`f\` returns \`[result, newValue]\` | The \`result\` |
 
-\`modify\` is the general one: in a single atomic step you compute both a value to hand back and the value to store. "Take one from stock and tell me whether it worked" is a \`modify\`. If you wrote it as \`get\`, check, \`set\`, two fibers could both see one item left and both take it.
+\`modify\` is the general operation. In 1 atomic step, you compute a value to return and a value to store. "Take 1 item from the stock and tell me if it worked" is a \`modify\`. If you write it as \`get\`, a check, and \`set\`, 2 fibers can both see 1 item and both take it.
 `,
       code: `import { Effect, Ref } from "effect"
 
@@ -117,11 +117,11 @@ getAndUpdate old: 1
 updateAndGet new: 5
 take: false
 left: 0`,
-      after: `\`take\` is defined once and run three times; each run re-reads the current stock. Try swapping the tuple in \`modify\` to \`[n - 1, true]\`: the compiler rejects it, because the second element must be the stored type, \`number\`.`
+      after: `The program defines \`take\` 1 time and runs it 3 times. Each run reads the current stock again. Change the pair in \`modify\` to \`[n - 1, true]\`: the compiler rejects it. The second element must have the stored type, \`number\`.`
     },
     {
       id: "state-management-l3",
-      title: "State that belongs to something",
+      title: "State that belongs to a service",
       explain: `
 In plain TypeScript, private state lives in a class:
 
@@ -132,9 +132,9 @@ class IdGenerator {
 }
 \`\`\`
 
-The Effect shape is a factory: an Effect that creates a \`Ref\` and returns functions that close over it. Whoever runs the factory gets their own instance; running it twice gives two independent counters. This is the pattern behind every stateful service in later sections.
+The Effect form is a factory. A factory is an effect that makes a \`Ref\` and returns functions that use it. Each run of the factory gives a new instance. If you run it 2 times, you get 2 independent counters. Each stateful service in the later sections uses this pattern.
 
-The same trick makes tests honest. A fake mailer that records every call in a \`Ref<Array<string>>\` lets a test assert "exactly two emails were sent, to these people" without a mocking library. Since the record is a \`Ref\`, it is safe even when the code under test sends concurrently.
+The same pattern makes tests exact. A fake mailer records each call in a \`Ref<Array<string>>\`. A test can then check "exactly 2 emails, to these addresses" without a mock library. The record is a \`Ref\`, so it is safe when the code under test sends emails concurrently.
 `,
       code: `import { Effect, Ref } from "effect"
 
@@ -172,17 +172,17 @@ Effect.runPromise(program)
 `,
       expectedOutput: `order-1 order-2 user-1
 sent 2 emails: ada@example.com, lin@example.com`,
-      after: `\`orders.next\` is a single Effect value run twice, and it produced two different ids, because the Ref it closes over changed in between. Move \`Ref.make(0)\` inside \`next\` and every call would start from a fresh zero. Where you create the Ref decides how long the state lives.`
+      after: `\`orders.next\` is 1 effect value. The program runs it 2 times and gets 2 different ids, because the Ref changed between the runs. Move \`Ref.make(0)\` inside \`next\`: each call then starts from a new zero. The place where you make the Ref decides how long the state lives.`
     },
     {
       id: "state-management-l4",
-      title: "SynchronizedRef: when the update is an Effect",
+      title: "SynchronizedRef: when the update is an effect",
       explain: `
-\`Ref.update\` takes a pure function. What if the new value comes from an Effect, say a price lookup or a call that can fail? You cannot \`yield*\` inside \`update\`. The tempting workaround is \`get\`, run the Effect, \`set\`. That is three steps again, and the lost-update bug is back the moment the middle step pauses.
+\`Ref.update\` accepts a pure function. What if the new value comes from an effect, for example a price lookup or a call that can fail? You cannot \`yield*\` inside \`update\`. A common workaround is \`get\`, then run the effect, then \`set\`. That is 3 steps again. The lost update error returns as soon as the middle step pauses.
 
-\`SynchronizedRef\` exists for this. \`SynchronizedRef.updateEffect(ref, f)\` takes a function that returns an Effect and runs the whole read-effect-write under a lock. Other updaters wait their turn. \`modifyEffect\` is the \`modify\` version. The pure operations, \`get\`, \`set\`, \`update\`, \`modify\`, are all still there.
+\`SynchronizedRef\` exists for this case. \`SynchronizedRef.updateEffect(ref, f)\` accepts a function that returns an effect. It runs the full sequence, read, effect, write, under a lock. A lock permits 1 fiber at a time; the other fibers wait. \`modifyEffect\` is the \`modify\` version. The pure operations \`get\`, \`set\`, \`update\`, and \`modify\` also exist.
 
-The cost is that updates are serialized, one at a time, which is the point: an effectful update that could interleave is an update that can be lost.
+Note: the updates run 1 at a time. That is the intent. An effectful update that can interleave is an update that can be lost.
 `,
       code: `import { Effect, Ref, SynchronizedRef } from "effect"
 
@@ -215,17 +215,23 @@ Effect.runPromise(program)
 `,
       expectedOutput: `Ref get/set: 1
 SynchronizedRef: 100`,
-      after: `The second half takes longer than the first, because one hundred 1 ms lookups now happen one after another instead of all at once. That is the trade: correctness costs the parallelism you were not allowed to have anyway. If the lookup can fail, the failure comes out of \`updateEffect\` and the stored value stays unchanged.`
+      after: `The second half takes more time than the first half. 100 lookups of 1 ms now run 1 after the other, not all at the same time. That is the cost of a correct result. If the lookup fails, \`updateEffect\` fails with that error, and the stored value does not change.`
     },
     {
       id: "state-management-l5",
-      title: "SubscriptionRef: state you can watch",
+      title: "SubscriptionRef: state that you can watch",
       explain: `
-Sometimes state is not only read, it is **watched**: a job status, an upload's progress, a config value that hot-reloads. \`SubscriptionRef\` is a \`Ref\` that also exposes \`SubscriptionRef.changes(ref)\`, a \`Stream\` that emits the current value first and then every new value as it is set.
+Some state is not only read; something must **watch** it. Examples: a job status, an upload progress value, a config value that reloads. \`SubscriptionRef\` is a \`Ref\` with 1 more operation, \`SubscriptionRef.changes(ref)\`. This returns a \`Stream\`. The stream first emits the current value, and then each new value when it is set.
 
-An observer is a stream pipeline: \`Stream.tap\` to react, \`Stream.takeUntil\` to decide when to stop watching, \`Stream.runDrain\` to run it to completion. Fork it with \`Effect.forkChild\` so it runs beside the writer, and \`Fiber.join\` it at the end.
+An observer is a stream pipeline:
 
-One subtlety. A stream subscribes when it starts running, and a forked fiber does not start before the parent continues. Writes made before the subscription are not replayed. The \`Deferred\` in the program is a one-shot signal: the observer completes it on its first value, and the writer waits for it before writing. No handshake, and you would see only the last value.
+- \`Stream.tap\` reacts to each value.
+- \`Stream.takeUntil\` decides when to stop.
+- \`Stream.runDrain\` runs the stream to the end.
+
+Fork the observer with \`Effect.forkChild\`, so that it runs next to the writer. Join it with \`Fiber.join\` at the end.
+
+Note: a stream subscribes when it starts to run, and a forked fiber does not start before the parent continues. The stream does not replay writes that happened before the subscription. The \`Deferred\` in the program is a signal that completes 1 time. The observer completes it on its first value. The writer waits for it before the first write. Without this signal, the observer sees only the last value.
 `,
       code: `import { Deferred, Effect, Fiber, Stream, SubscriptionRef } from "effect"
 
@@ -258,17 +264,17 @@ status: loading
 status: saving
 status: done
 observer finished, final: done`,
-      after: `"idle" was printed even though nothing set it: \`changes\` starts with the current value, so a late subscriber still learns the present state. Delete the \`Deferred.await\` line and run again: the observer attaches after all three writes and prints only "done".`
+      after: `The program printed "idle", but no write set that value. \`changes\` starts with the current value, so a late observer still gets the present state. Remove the \`Deferred.await\` line and run the program again: the observer subscribes after the 3 writes and prints only "done".`
     },
     {
       id: "state-management-l6",
-      title: "TxRef and Effect.tx: several values, one change",
+      title: "TxRef and Effect.tx: several values, 1 change",
       explain: `
-A bank transfer touches two balances. If the debit lands and the credit does not, money vanished. \`Ref\` cannot help: each Ref is atomic on its own, but two Refs together are not.
+A bank transfer changes 2 balances. If the debit is stored and the credit is not, the money is lost. \`Ref\` cannot prevent this. Each Ref is atomic by itself, but 2 Refs together are not.
 
-\`TxRef\` is a transactional ref. Its operations look like \`Ref\`'s, with a twist: inside \`Effect.tx(...)\`, every read and write is recorded in a journal and committed together only when the body finishes. If the body fails, nothing is written, including writes that already happened earlier in the body. If another transaction commits a conflicting change first, this one is retried from the start with fresh reads. That is why the program can run 70 transfers concurrently, each with a pause inside, and still lose nothing.
+\`TxRef\` is a transactional ref. Its operations look like the \`Ref\` operations, with 1 difference. Inside \`Effect.tx(...)\`, Effect records each read and write in a journal. It stores the writes only when the body completes. If the body fails, Effect stores nothing, not even the writes that happened earlier in the body. If another transaction changes one of the same values first, this transaction starts again with new reads. For this reason, the program can run 70 transfers concurrently, each with a pause inside, and lose nothing.
 
-A single \`TxRef.get\` or \`TxRef.set\` outside \`Effect.tx\` is a tiny transaction of its own. \`Effect.tx\` is what groups several operations into one.
+A single \`TxRef.get\` or \`TxRef.set\` outside \`Effect.tx\` is a small transaction by itself. \`Effect.tx\` puts several operations into 1 transaction.
 `,
       code: `import { Effect, TxRef } from "effect"
 
@@ -312,14 +318,51 @@ Effect.runPromise(program)
       expectedOutput: `after 30: alice 70, bob 30, transfers 1
 after 500 (Failure): alice 70, bob 30, transfers 1
 after 70 x 1: alice 0, bob 100, transfers 71`,
-      after: `The failed transfer incremented \`transfers\` and then failed, and the count stayed at 1: the write was rolled back with the rest of the transaction. Remove the \`Effect.tx\` wrapper and run again: with the pause inside, concurrent transfers read stale balances and the totals stop adding up to 100.`
+      after: `The failed transfer increased \`transfers\` and then failed. The count stayed at 1: Effect discarded that write together with the rest of the transaction. Remove the \`Effect.tx\` call and run the program again. With the pause inside, concurrent transfers read old balances, and the sum is no longer 100.`
+    }
+  ],
+  dosAndDonts: [
+    {
+      do: "Keep state that fibers share in a \`Ref\`.",
+      dont: "Do not share a \`let\` variable between fibers.",
+      why: "A pause between the read and the write lets other fibers write old values, and updates are lost."
+    },
+    {
+      do: "Use \`Ref.update\` or \`Ref.modify\` for a change that depends on the current value.",
+      dont: "Do not call \`Ref.get\`, compute a new value, and then call \`Ref.set\`.",
+      why: "The read and the write are 2 steps, so 2 fibers can read the same value and 1 update is lost."
+    },
+    {
+      do: "Return \`[result, newValue]\` from \`Ref.modify\`, in that order.",
+      dont: "Do not return \`[newValue, result]\`.",
+      why: "The first element goes to the caller and the second element is stored, so a swap stores the wrong value or does not compile."
+    },
+    {
+      do: "Call \`Ref.make\` 1 time, in the factory effect that builds the service.",
+      dont: "Do not call \`Ref.make\` inside the function that uses the ref.",
+      why: "Each call then makes a new ref with the initial value, and the state resets on each call."
+    },
+    {
+      do: "Use \`SynchronizedRef.updateEffect\` when the new value comes from an effect.",
+      dont: "Do not use \`Ref.get\`, then an effect, then \`Ref.set\` for an effectful update.",
+      why: "The effect between the read and the write pauses, and concurrent updates are lost."
+    },
+    {
+      do: "Wait for a \`Deferred\` signal from the observer before you write to a \`SubscriptionRef\`.",
+      dont: "Do not write directly after \`Effect.forkChild\` of the observer.",
+      why: "The forked fiber has not subscribed yet, and \`changes\` does not replay earlier values, so the observer misses them."
+    },
+    {
+      do: "Wrap several \`TxRef\` operations in 1 \`Effect.tx\` call.",
+      dont: "Do not run \`TxRef.get\` and \`TxRef.set\` on 2 refs as separate calls.",
+      why: "Each call is its own transaction, so a pause between them lets another transfer read old balances, and the totals become wrong."
     }
   ],
   challenges: [
     {
       id: "state-management-c1",
       title: "Read, pause, write",
-      task: `Fifty fibers each do some work (the \`sleep\` stands in for it and must stay) and then count themselves. The counter ends at \`1\`. Fix the counting so it prints \`counted: 50\`.`,
+      task: `50 fibers each do some work and then add 1 to a counter. The \`sleep\` represents the work and must stay. The counter ends at \`1\`. Change the counter update so that the program prints \`counted: 50\`.`,
       code: `import { Effect, Ref } from "effect"
 
 const ids = Array.from({ length: 50 }, (_, i) => i)
@@ -359,16 +402,16 @@ Effect.runPromise(program)
 `,
       expectedOutput: `counted: 50`,
       hints: [
-        "Between the get and the set, what do the other 49 fibers see?",
-        "A Ref is only atomic if the read and the write are one operation. Lesson 2 has a table of those.",
-        "Do the work first, then Ref.update(counter, (n) => n + 1)."
+        "What do the other 49 fibers see between the get and the set?",
+        "A Ref is only atomic when the read and the write are 1 operation. Lesson 2 has a table of those operations.",
+        "Do the work first, then call Ref.update(counter, (n) => n + 1)."
       ],
-      explanation: `\`Ref.get\` then \`Ref.set\` is two operations with a pause between them, which is the exact shape of the lost-update bug from lesson 1, only with a Ref standing in for the \`let\`. A Ref does not make bad patterns safe; it makes the safe pattern available. \`Ref.update\` reads and writes in one atomic step, so fifty fibers produce fifty increments no matter how they interleave. The work moves outside the update, where it belongs.`
+      explanation: `\`Ref.get\` and then \`Ref.set\` are 2 operations with a pause between them. That is the exact form of the lost update error from lesson 1, with a Ref in place of the \`let\`. A Ref does not make a bad pattern safe. It makes the safe pattern available. \`Ref.update\` reads and writes in 1 atomic step, so 50 fibers make 50 increments in any order. The work moves before the update, where it belongs.`
     },
     {
       id: "state-management-c2",
       title: "An update that waits",
-      task: `The total should be built by adding each item's price, and the price comes from a lookup that takes time. The file does not compile: the update function returns an Effect where a plain number is expected. Fix it with the operation made for effectful updates. The program should print \`total: 6\`.`,
+      task: `The program must add the price of each item to the total. The price comes from a lookup that takes time. The file does not compile: the update function returns an effect, but the operation expects a plain number. Use the operation that is made for effectful updates. The program must print \`total: 6\`.`,
       code: `import { Effect, SynchronizedRef } from "effect"
 
 const lookupPrice = (item: string) =>
@@ -405,16 +448,16 @@ Effect.runPromise(program)
 `,
       expectedOutput: `total: 6`,
       hints: [
-        "Read the type error: update wants a function that returns a number, and yours returns an Effect of a number.",
-        "SynchronizedRef has a second family of operations for exactly this. Lesson 4 names it.",
+        "Read the type error. update expects a function that returns a number. Your function returns an effect of a number.",
+        "SynchronizedRef has a second set of operations for this case. Lesson 4 names it.",
         "Replace SynchronizedRef.update with SynchronizedRef.updateEffect."
       ],
-      explanation: `\`update\` takes a pure function \`(A) => A\`. Returning an \`Effect<number>\` where a \`number\` is expected is a type error, and that error is the guard rail: a pure update cannot pause, so it cannot lose updates. \`updateEffect\` takes \`(A) => Effect<A>\` and runs the whole thing under the ref's lock, so the three lookups are serialized and each one adds to the real current sum. With a plain \`Ref\` the compiler would have pushed you toward get-then-set, and the bug from lesson 4.`
+      explanation: `\`update\` accepts a pure function \`(A) => A\`. Your function returns an \`Effect<number>\` where a \`number\` is expected. That is a type error, and the error protects you: a pure update cannot pause, so it cannot lose updates. \`updateEffect\` accepts \`(A) => Effect<A>\` and runs the full sequence under the lock of the ref. The 3 lookups run 1 after the other, and each one adds to the real current sum. With a plain \`Ref\`, the compiler pushes you to get-then-set, and to the error from lesson 4.`
     },
     {
       id: "state-management-c3",
-      title: "Off by one id",
-      task: `\`nextId\` should hand out \`1\`, \`2\`, \`3\`, but it hands out \`0\`, \`1\`, \`2\`. The counter is stored correctly; what is returned is not. Fix \`modify\` so the program prints \`ids: 1 2 3\`.`,
+      title: "Off by 1 id",
+      task: `\`nextId\` must give \`1\`, \`2\`, \`3\`. It gives \`0\`, \`1\`, \`2\`. The stored counter is correct; the returned value is not. Change the \`modify\` call so that the program prints \`ids: 1 2 3\`.`,
       code: `import { Effect, Ref } from "effect"
 
 const program = Effect.gen(function* () {
@@ -445,16 +488,16 @@ Effect.runPromise(program)
 `,
       expectedOutput: `ids: 1 2 3`,
       hints: [
-        "modify returns a pair. Which element is handed back to you, and which one is stored?",
-        "Lesson 2: the first element is the result, the second is the new value. The result here is the old n.",
+        "modify returns a pair. Which element does the caller get, and which element is stored?",
+        "Lesson 2: the first element is the result, the second element is the new value. The result here is the old n.",
         "Return [n + 1, n + 1], or use Ref.updateAndGet(counter, (n) => n + 1)."
       ],
-      explanation: `\`Ref.modify\` takes \`(current) => [result, newValue]\`. The code stored \`n + 1\` correctly but returned \`n\`, the value **before** the increment, which is what \`getAndUpdate\` does. Returning \`n + 1\` in both positions gives the value **after**, which is \`updateAndGet\`. Both are fine designs; the bug was mixing them. When the result and the stored value are the same, \`updateAndGet\` says so more clearly than \`modify\`.`
+      explanation: `\`Ref.modify\` accepts \`(current) => [result, newValue]\`. The code stored \`n + 1\` correctly, but it returned \`n\`, the value **before** the increment. That is what \`getAndUpdate\` does. When you return \`n + 1\` in both positions, the caller gets the value **after** the increment. That is what \`updateAndGet\` does. Both designs are valid; the error was the mix. When the result and the stored value are the same, \`updateAndGet\` says it more clearly than \`modify\`.`
     },
     {
       id: "state-management-c4",
-      title: "A fresh Ref every call",
-      task: `The generator is supposed to produce increasing ids, but every call returns \`1\`. The Ref is created in the wrong place. Restructure \`makeIdGenerator\` so the program prints \`1 2 3\`.`,
+      title: "A new Ref on each call",
+      task: `The generator must give ids that increase, but each call returns \`1\`. The program makes the Ref in the wrong place. Change the structure of \`makeIdGenerator\` so that the program prints \`1 2 3\`.`,
       code: `import { Effect, Ref } from "effect"
 
 const makeIdGenerator = Effect.succeed({
@@ -489,16 +532,16 @@ Effect.runPromise(program)
 `,
       expectedOutput: `1 2 3`,
       hints: [
-        "Ref.make is an Effect. Every time next runs, what does it run first?",
-        "Lesson 3: create the Ref once in a factory Effect, and let next close over it.",
-        "Make makeIdGenerator an Effect.gen that yields Ref.make(0) once and returns { next: Ref.updateAndGet(counter, ...) }."
+        "Ref.make is an effect. What does next run first on each call?",
+        "Lesson 3: make the Ref 1 time in a factory effect, and let next use that Ref.",
+        "Make makeIdGenerator an Effect.gen that yields Ref.make(0) 1 time and returns { next: Ref.updateAndGet(counter, ...) }."
       ],
-      explanation: `\`Ref.make(0)\` is a description of "create a new Ref". It lives inside \`next\`, so every run of \`next\` creates a fresh Ref at zero, increments it to one, and throws it away. Moving \`Ref.make\` into the factory means it runs once, when \`makeIdGenerator\` is run, and \`next\` closes over that single Ref. The rule from lesson 3: where you \`yield*\` the \`Ref.make\` is where the state's lifetime begins.`
+      explanation: `\`Ref.make(0)\` is a description of "make a new Ref". It is inside \`next\`, so each run of \`next\` makes a new Ref at zero, increases it to 1, and discards it. When you move \`Ref.make\` into the factory, it runs 1 time, when the program runs \`makeIdGenerator\`. \`next\` then uses that single Ref. The rule from lesson 3: the place where you \`yield*\` the \`Ref.make\` is the place where the lifetime of the state starts.`
     },
     {
       id: "state-management-c5",
-      title: "The observer that arrives late",
-      task: `The observer should print every progress value, \`0\` through \`3\`, but it only prints the last one. The observer attaches after the writes happen. Add the handshake so the program prints all four lines and then \`finished\`.`,
+      title: "The observer that starts too late",
+      task: `The observer must print each progress value from \`0\` to \`3\`. It prints only the last value, because it subscribes after the writes. Add the signal from lesson 5 so that the program prints all 4 lines and then \`finished\`.`,
       code: `import { Effect, Fiber, Stream, SubscriptionRef } from "effect"
 
 const program = Effect.gen(function* () {
@@ -552,16 +595,16 @@ progress: 2
 progress: 3
 finished`,
       hints: [
-        "forkChild returns before the child has started. When does the stream actually subscribe?",
-        "Lesson 5 uses a Deferred: the observer completes it on its first value, the writer awaits it before writing.",
-        "Add a Deferred.make<void>(), a Stream.tap(() => Deferred.succeed(subscribed, void 0)) in the observer, and yield* Deferred.await(subscribed) before the first set."
+        "forkChild returns before the child fiber starts. When does the stream subscribe?",
+        "Lesson 5 uses a Deferred. The observer completes it on its first value. The writer waits for it before the first write.",
+        "Add Deferred.make<void>(), add Stream.tap(() => Deferred.succeed(subscribed, void 0)) to the observer, and put yield* Deferred.await(subscribed) before the first set."
       ],
-      explanation: `A forked fiber is scheduled, not started. The parent keeps going, performs all three writes synchronously, and only then does the observer's stream subscribe, at which point the current value is already \`3\`. \`changes\` emits the current value on subscription but never replays the past. The \`Deferred\` turns "I am subscribed" into a signal the writer can wait for. This is the general rule for any producer and consumer on separate fibers: do not assume the consumer is ready until it has told you.`
+      explanation: `Effect schedules a forked fiber; it does not start it at once. The parent continues, does the 3 writes without a pause, and only then does the stream of the observer subscribe. At that moment the current value is \`3\`. \`changes\` emits the current value on subscription, but it never replays earlier values. The \`Deferred\` changes "I am subscribed" into a signal that the writer can wait for. This is the general rule for a producer and a consumer on separate fibers. Do not assume that the consumer is ready before it tells you.`
     },
     {
       id: "state-management-c6",
-      title: "Money out of thin air",
-      task: `Fifty concurrent transfers of 1 should move 50 from alice to bob and leave the total at 100. Instead the total grows. The transfer reads and writes the refs as separate steps. Make it one atomic change so the program prints \`alice 50, bob 50, total 100\`.`,
+      title: "Money that appears from nothing",
+      task: `50 concurrent transfers of 1 must move 50 from alice to bob. The total must stay at 100. Instead, the total increases. The transfer reads and writes the refs as separate steps. Make the transfer 1 atomic change so that the program prints \`alice 50, bob 50, total 100\`.`,
       code: `import { Effect, TxRef } from "effect"
 
 const program = Effect.gen(function* () {
@@ -606,11 +649,11 @@ Effect.runPromise(program)
 `,
       expectedOutput: `alice 50, bob 50, total 100`,
       hints: [
-        "A TxRef operation on its own is a one-step transaction. What groups several steps into one?",
-        "Lesson 6 wraps the whole transfer body in a single call.",
+        "A TxRef operation by itself is a transaction with 1 step. Which function puts several steps into 1 transaction?",
+        "Lesson 6 wraps the full transfer body in 1 call.",
         "Wrap the Effect.gen in Effect.tx(...)."
       ],
-      explanation: `Without \`Effect.tx\`, each \`TxRef\` call is its own tiny transaction. Fifty fibers read \`100\`, pause, and each writes \`99\`, while each credits bob by one: the debit is lost, the credit is not, and money appears. Inside \`Effect.tx\` the read is recorded in a journal; when a transfer tries to commit after another one changed \`alice\`, the conflict is detected and the transaction restarts with a fresh read. Every transfer eventually commits against the true balance, so the total is conserved. \`Ref\` could not express this at all, because atomicity across two Refs is exactly what \`Ref\` lacks.`
+      explanation: `Without \`Effect.tx\`, each \`TxRef\` call is a small transaction by itself. 50 fibers read \`100\`, pause, and each one writes \`99\`. Each one also adds 1 to bob. The debit is lost, the credit is not, and money appears. Inside \`Effect.tx\`, Effect records the read in a journal. A transfer can try to store its writes after another transfer changed \`alice\`. Effect then detects the conflict and starts the transaction again with a new read. Each transfer stores its writes against the true balance in the end, so the total does not change. \`Ref\` cannot express this, because \`Ref\` has no atomic operation across 2 refs.`
     }
   ],
   problems: [
@@ -618,10 +661,10 @@ Effect.runPromise(program)
       id: "state-management-p1",
       title: "Inventory reservations",
       spec: `
-Build a tiny inventory on top of a \`Ref<Record<string, number>>\` starting at \`{ apple: 3, pear: 2 }\`.
+Build a small inventory on top of a \`Ref<Record<string, number>>\` that starts at \`{ apple: 3, pear: 2 }\`.
 
-- \`reserve(item, qty)\` uses \`Ref.modify\` to check and update in one atomic step. If enough stock exists, subtract \`qty\` and return \`"ok"\`; otherwise leave the stock unchanged and return \`"out of stock"\`.
-- Process the requests \`[["apple", 2], ["pear", 1], ["apple", 2], ["apple", 1]]\` in order and print one line per request, then the final stock.
+- \`reserve(item, qty)\` uses \`Ref.modify\` to check and update in 1 atomic step. If the stock is sufficient, subtract \`qty\` and return \`"ok"\`. If not, keep the stock unchanged and return \`"out of stock"\`.
+- Process the requests \`[["apple", 2], ["pear", 1], ["apple", 2], ["apple", 1]]\` in order. Print 1 line per request, then the final stock.
 
 Exact output:
 
@@ -681,20 +724,20 @@ reserve apple x2: out of stock
 reserve apple x1: ok
 stock: apple=0 pear=1`,
       hints: [
-        "Ref.modify(stock, (s) => [result, newStock]) lets you decide and update in one step (lesson 2).",
-        "Return [\"ok\", { ...s, [item]: have - qty }] when there is enough, and [\"out of stock\", s] otherwise.",
-        "A plain for...of loop with yield* inside the generator is fine for sequential requests."
+        "Ref.modify(stock, (s) => [result, newStock]) lets you decide and update in 1 step (lesson 2).",
+        "Return [\"ok\", { ...s, [item]: have - qty }] when the stock is sufficient, and [\"out of stock\", s] when it is not.",
+        "A plain for...of loop with yield* inside the generator is correct for sequential requests."
       ]
     },
     {
       id: "state-management-p2",
       title: "Progress reporter",
       spec: `
-Process three files and report progress through a \`SubscriptionRef<number>\`.
+Process 3 files and report the progress through a \`SubscriptionRef<number>\`.
 
-- \`processFile(name)\` is given: it sleeps briefly and returns.
-- Start an observer with \`SubscriptionRef.changes\` that prints \`progress: <n>/3\` for every value, including the initial \`0\`, and stops after \`3\`. Fork it, and use a \`Deferred\` handshake so no update is missed.
-- Process the files in order with \`Effect.forEach\`, incrementing the ref after each one.
+- \`processFile(name)\` is given. It sleeps for a short time and returns.
+- Start an observer with \`SubscriptionRef.changes\`. It prints \`progress: <n>/3\` for each value, with the initial \`0\` included, and stops after \`3\`. Fork it. Use a \`Deferred\` signal so that the observer misses no update.
+- Process the files in order with \`Effect.forEach\`. Add 1 to the ref after each file.
 - Join the observer, then print \`all files processed\`.
 
 Exact output:
@@ -757,21 +800,21 @@ progress: 2/3
 progress: 3/3
 all files processed`,
       hints: [
-        "Copy the observer shape from lesson 5: changes, tap to print, tap to complete the Deferred, takeUntil, runDrain, forkChild.",
-        "Effect.forEach(files, (name) => processFile(name).pipe(Effect.andThen(SubscriptionRef.update(progress, n => n + 1)))) processes in order.",
-        "Deferred.await(subscribed) must come before the forEach, and Fiber.join(observer) before the final log."
+        "Copy the observer form from lesson 5: changes, tap to print, tap to complete the Deferred, takeUntil, runDrain, forkChild.",
+        "Effect.forEach(files, (name) => processFile(name).pipe(Effect.andThen(SubscriptionRef.update(progress, n => n + 1)))) processes the files in order.",
+        "Put Deferred.await(subscribed) before the forEach, and Fiber.join(observer) before the final log."
       ]
     },
     {
       id: "state-management-p3",
       title: "Bank ledger",
       spec: `
-Model three accounts as \`TxRef<number>\` values: Ada \`100\`, Lin \`50\`, Sam \`0\`.
+Model 3 accounts as \`TxRef<number>\` values: Ada \`100\`, Lin \`50\`, Sam \`0\`.
 
-- \`transfer(from, to, amount)\` is one \`Effect.tx\` transaction. It fails with the string \`"insufficient funds"\` if \`from\` has less than \`amount\`, otherwise debits and credits. Put an \`Effect.sleep("1 millis")\` between the read and the writes so concurrent transfers overlap.
-- Run \`Ada -> Lin 30\` and \`Lin -> Sam 100\` one after another, printing \`ok\` or the error message for each using \`Effect.result\`.
-- Then run 20 concurrent \`Ada -> Sam 1\` transfers with \`Effect.forEach\` and \`concurrency: "unbounded"\`, and print \`done\`.
-- Finally print the balances and their total.
+- \`transfer(from, to, amount)\` is 1 \`Effect.tx\` transaction. It fails with the string \`"insufficient funds"\` if \`from\` holds less than \`amount\`. If not, it debits \`from\` and credits \`to\`. Put an \`Effect.sleep("1 millis")\` between the read and the writes, so that concurrent transfers overlap.
+- Run \`Ada -> Lin 30\` and then \`Lin -> Sam 100\`. Print \`ok\` or the error message for each one. Use \`Effect.result\`.
+- Then run 20 concurrent \`Ada -> Sam 1\` transfers with \`Effect.forEach\` and \`concurrency: "unbounded"\`. Print \`done\`.
+- At the end, print the balances and their total.
 
 Exact output:
 
@@ -842,36 +885,36 @@ Lin -> Sam 100: insufficient funds
 Ada -> Sam 1 x 20: done
 Ada=50 Lin=80 Sam=20 total=150`,
       hints: [
-        "The transfer body is lesson 6's: get, check, sleep, set, update, all inside Effect.tx.",
-        "Effect.result(tx) gives a Result; outcome._tag === \"Success\" means ok, otherwise outcome.failure is the message.",
-        "Effect.all([TxRef.get(ada), TxRef.get(lin), TxRef.get(sam)]) reads all three balances at the end."
+        "The transfer body is the one from lesson 6: get, check, sleep, set, update, all inside Effect.tx.",
+        "Effect.result(tx) gives a Result. outcome._tag === \"Success\" means ok. In the other case, outcome.failure is the message.",
+        "Effect.all([TxRef.get(ada), TxRef.get(lin), TxRef.get(sam)]) reads all 3 balances at the end."
       ]
     }
   ],
   recall: [
     {
-      q: "Why does a `let` shared across fibers lose updates, and why does `Ref.update` not?",
-      a: "With `let`, read and write are separate steps; any pause between them lets other fibers read the same stale value. `Ref.update(ref, f)` applies `f` and stores the result as one atomic operation, and `f` is a pure function, so there is no pause for anyone to slip into."
+      q: "Why does a `let` that fibers share lose updates, and why does `Ref.update` not?",
+      a: "With `let`, the read and the write are separate steps. A pause between them lets other fibers read the same old value. `Ref.update(ref, f)` applies `f` and stores the result as 1 atomic operation. `f` is a pure function, so there is no pause where another fiber can act."
     },
     {
-      q: "What would the type of `Ref.modify(ref, (n) => [n > 0, n - 1])` be, for `ref: Ref<number>`?",
-      a: "`Effect<boolean>`. `modify` takes `(A) => [B, A]`, returns the `B` (here the boolean), and stores the `A` (here `n - 1`)."
+      q: "What is the type of `Ref.modify(ref, (n) => [n > 0, n - 1])`, for `ref: Ref<number>`?",
+      a: "`Effect<boolean>`. `modify` accepts `(A) => [B, A]`. It returns the `B` (here the boolean) and stores the `A` (here `n - 1`)."
     },
     {
-      q: "Which container would you reach for when the new value comes from an HTTP call?",
-      a: "`SynchronizedRef` with `updateEffect` or `modifyEffect`. The update function returns an Effect, and the read-effect-write runs under a lock so concurrent updates are serialized instead of lost. A plain `Ref` cannot run an Effect inside `update`."
+      q: "Which container do you use when the new value comes from an HTTP call?",
+      a: "`SynchronizedRef` with `updateEffect` or `modifyEffect`. The update function returns an effect. The read, the effect, and the write run under a lock, so concurrent updates run 1 at a time and are not lost. A plain `Ref` cannot run an effect inside `update`."
     },
     {
       q: "What does `SubscriptionRef.changes(ref)` emit first, and what does it never emit?",
-      a: "It emits the current value first, then every new value as it is set. It never replays values set before the stream subscribed, which is why a forked observer needs a handshake (a `Deferred`) before the writer starts."
+      a: "It emits the current value first, then each new value when it is set. It never replays values that were set before the stream subscribed. That is why a forked observer needs a signal (a `Deferred`) before the writer starts."
     },
     {
-      q: "What does `Effect.tx` add on top of individual `TxRef` operations?",
-      a: "Grouping. Each `TxRef.get`/`set`/`update` on its own is a one-step transaction. `Effect.tx(body)` records every read and write in the body in a journal and commits them together: a failure discards all of them, and a conflicting commit by another transaction restarts this one with fresh reads."
+      q: "What does `Effect.tx` add on top of the single `TxRef` operations?",
+      a: "It puts them into 1 transaction. Each `TxRef.get`, `set`, or `update` by itself is a transaction with 1 step. `Effect.tx(body)` records each read and write in the body in a journal and stores them together. A failure discards all of them. If another transaction changes one of the same values first, this transaction starts again with new reads."
     },
     {
-      q: "Where should `Ref.make` be called so that a service's state lives as long as the service?",
-      a: "Once, in the factory Effect that builds the service, before returning the functions that use it. If `Ref.make` sits inside one of those functions, every call creates a fresh Ref and the state resets each time."
+      q: "Where must you call `Ref.make` so that the state of a service lives as long as the service?",
+      a: "1 time, in the factory effect that builds the service, before it returns the functions that use the Ref. If `Ref.make` is inside one of those functions, each call makes a new Ref, and the state resets on each call."
     }
   ]
 }

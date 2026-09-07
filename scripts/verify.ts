@@ -43,6 +43,7 @@ function describe(r: Awaited<ReturnType<typeof check>>, expected: string) {
 
 for (const s of sections) {
   console.log(`\n== ${s.id} (${s.lessons.length} lessons, ${s.challenges.length} challenges, ${s.problems.length} problems, ${s.recall.length} recall)`)
+  report(`has dosAndDonts (5-8)`, Array.isArray(s.dosAndDonts) && s.dosAndDonts.length >= 5 && s.dosAndDonts.length <= 8, `found ${s.dosAndDonts?.length ?? 0}`)
   const ids = new Set<string>()
   for (const item of [...s.lessons, ...s.challenges, ...s.problems]) {
     if (ids.has(item.id)) report(`duplicate id ${item.id}`, false)

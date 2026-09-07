@@ -42,7 +42,13 @@ Every API you use MUST exist in this version. The verifier will catch type error
    the format across lessons: problem-first, comparison table, side-by-side "plain TS vs
    Effect" (show the plain TS version as a code block in `explain`, the Effect version as `code`).
    Lessons build on each other: each introduces ONE new thing.
-3. `challenges` (5-8) "Fix it". Faded worked examples: early ones have a single missing
+3. `dosAndDonts` (5-8 pairs) "Do and don't". Each pair: `do` (imperative, what to do), `dont`
+   (the common mistake), `why` (one sentence: what goes wrong). Rendered as a 3-column table
+   between Learn and Fix it. Make them specific to this section's APIs, not generic advice.
+   Example: do "Use \`Effect.try\` for code that can throw." / dont "Do not put code that
+   can throw inside \`Effect.sync\`." / why "A throw inside \`Effect.sync\` becomes a
+   defect with no type, and \`Effect.catch\` cannot see it."
+4. `challenges` (5-8) "Fix it". Faded worked examples: early ones have a single missing
    call or a wrong function name with the shape obvious; later ones remove more. Each MUST:
    - fail as given (type error or wrong output), pass with `solution`
    - have 2-3 progressive `hints`
@@ -50,12 +56,12 @@ Every API you use MUST exist in this version. The verifier will catch type error
    - include at least ONE challenge whose bug is only visible as a TYPE error (e.g. an
      unhandled error type, a missing requirement, wrong channel). That is the point of Effect.
    - task text must not give away the answer, but must be precise about what "fixed" means.
-4. `problems` (2-4) "Build it". Real, small, motivating programs (an order pipeline, a retrying
+5. `problems` (2-4) "Build it". Real, small, motivating programs (an order pipeline, a retrying
    fetch with fake data, a rate limiter, an inventory system...). `starter` = imports +
    type definitions + TODO comments, must fail. `spec` states required behavior AND the exact
    output. Solutions 25-80 lines. Deterministic: no real clocks in output, no real network,
    no randomness (use fixed data). Use `Effect.sleep` only with tiny durations if needed.
-5. `recall` (5-8). Short retrieval questions with markdown answers. Include one
+6. `recall` (5-8). Short retrieval questions with markdown answers. Include one
    "what would the type be?" question and one "which function would you reach for?" question.
 
 ## Code rules

@@ -51,6 +51,15 @@ export interface Recall {
   a: string
 }
 
+export interface DoDont {
+  /** Imperative, STE. What to do. */
+  do: string
+  /** What not to do, the common mistake. */
+  dont: string
+  /** One sentence: what goes wrong if you do the wrong thing. */
+  why: string
+}
+
 export interface Section {
   id: string
   title: string
@@ -61,6 +70,8 @@ export interface Section {
   /** Markdown. The mental model: the problem this solves, then the idea. */
   intro: string
   lessons: Array<Lesson>
+  /** 5-8 pairs. Shown between Learn and Fix it. */
+  dosAndDonts: Array<DoDont>
   challenges: Array<Challenge>
   problems: Array<Problem>
   recall: Array<Recall>

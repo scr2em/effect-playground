@@ -82,3 +82,7 @@ a.anchor:hover { color: var(--accent); }
 a.anchor.copied::after { content: " copied"; font-size: 11px; color: var(--ok); }
 .item, .recall, h2.part { scroll-margin-top: 16px; }
 .item.flash { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(124,156,255,.25); transition: box-shadow .3s; }
+
+table.dodont td.do { border-left: 3px solid var(--ok); }
+table.dodont td.dont { border-left: 3px solid var(--danger); }
+table.dodont td { width: 33%; }

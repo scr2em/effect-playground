@@ -176,6 +176,14 @@
       c.append(item)
     }
 
+    if (s.dosAndDonts?.length) {
+      c.append(el("h2", { class: "part", id: "item-do-dont" }, "Do and don't ", anchor(s.id, "do-dont")))
+      const table = el("table", { class: "dodont" }, el("thead", {}, el("tr", {}, el("th", {}, "Do"), el("th", {}, "Don't"), el("th", {}, "Why"))))
+      const body = el("tbody")
+      for (const d of s.dosAndDonts) body.append(el("tr", {}, el("td", { class: "do", html: marked.parseInline(d.do) }), el("td", { class: "dont", html: marked.parseInline(d.dont) }), el("td", { html: marked.parseInline(d.why) })))
+      table.append(body)
+      c.append(el("div", { class: "md" }, table))
+    }
     if (s.challenges.length) c.append(el("h2", { class: "part", id: "item-fix-it" }, "Fix it ", anchor(s.id, "fix-it")), md("Each program below is broken or incomplete. Make it print the expected output with zero type errors. Use hints before the solution."))
     s.challenges.forEach((ch, i) => {
       const item = el("div", { class: "item" + (isDone(ch.id) ? " done" : ""), id: "item-" + ch.id })

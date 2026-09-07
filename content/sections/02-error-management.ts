@@ -6,7 +6,7 @@ const section: Section = {
   order: 2,
   summary: "Expected failures versus defects, tagged error classes, the catch family, and reading an Exit.",
   intro: `
-**The problem.** In plain TypeScript every error travels the same road: \`throw\`. Look at this checkout:
+**The problem.** In plain TypeScript, every error uses the same mechanism: \`throw\`. Look at this checkout:
 
 \`\`\`ts
 async function checkout(cart: Cart): Promise<Receipt> {
@@ -23,44 +23,44 @@ try {
 }
 \`\`\`
 
-The signature says \`Promise<Receipt>\`. It does not say which errors can come out. The \`catch\` block gets \`unknown\`, so you write \`instanceof\` chains and hope you remembered every case. Worse, the same \`catch\` that was meant for "card declined" also swallows a real bug, and the bug is now hidden behind a friendly banner.
+The signature says \`Promise<Receipt>\`. It does not say which errors can come out. The \`catch\` block gets \`unknown\`, so you write \`instanceof\` checks, and you hope that you remembered every case. Also, the \`catch\` block that you wrote for "card declined" also catches a real bug. The bug is now hidden behind a friendly banner.
 
 ### The shift
 
-Today you think of an error as **something that escapes**. It jumps out of the function, up the stack, until some \`catch\` stops it. Effect asks you to think of an error as **a value the program returns**, in the same way it returns a success. The error is right there in the type:
+Today you think of an error as **a value that escapes**. It exits the function and goes up the stack until a \`catch\` block stops it. In Effect, an error is **a value that the program returns**, in the same way that it returns a success. The error is in the type:
 
 \`\`\`ts
 const checkout: (cart: Cart) => Effect<Receipt, OutOfStock | CardDeclined>
 \`\`\`
 
-Handle \`OutOfStock\` and the type becomes \`Effect<Receipt, CardDeclined>\`. Handle that too and it becomes \`Effect<Receipt, never>\`: the compiler now knows nothing is left. Forget one and the type keeps it, and any function that claims \`never\` will not compile. The error channel shrinks as you handle things, and you can read what is left at any point.
+Catch \`OutOfStock\`, and the type becomes \`Effect<Receipt, CardDeclined>\`. Catch \`CardDeclined\` too, and the type becomes \`Effect<Receipt, never>\`. The compiler now knows that no error is left. If you do not catch one error, the type keeps it. A function that declares \`never\` then does not compile. The error type becomes smaller as you catch errors, and you can read what is left at any point.
 
-Effect also refuses to mix the two kinds of trouble. A **failure** is expected and typed (\`Effect.fail\`). A **defect** is a bug: a thrown exception, or \`Effect.die\` (unexpected, untyped). The normal \`catch\` functions only see failures, so a bug cannot hide behind a fallback. Interruption is the third kind: the program was cancelled from outside.
+Effect also keeps 2 kinds of problem apart. A **failure** is expected and typed (\`Effect.fail\`). A **defect** is a bug: a thrown exception, or \`Effect.die\`. A defect is unexpected and not typed. The normal \`catch\` functions see only failures, so a bug cannot hide behind a fallback. An **interrupt** is the third kind: code outside the effect stopped it.
 
 | | Plain TS \`try/catch\` | Effect |
 |---|---|---|
-| Where the error type lives | Nowhere, \`catch (e)\` gets \`unknown\` | The second type parameter, \`E\` |
+| Where the error type is | Nowhere, \`catch (e)\` gets \`unknown\` | In the second type parameter, \`E\` |
 | Expected error vs bug | Same \`throw\`, same \`catch\` | \`Effect.fail\` (typed) vs \`Effect.die\` (defect) |
-| Handle one kind only | \`instanceof\` check, rethrow the rest | \`catchTag("X", ...)\`, the rest stays in \`E\` |
-| Forgot to handle a case | Compiles, crashes in production | Compiles only if the caller's type admits it |
-| See exactly what happened | Gone once caught | \`Exit\` and \`Cause\` are plain values |
+| Catch one kind only | \`instanceof\` check, then throw the rest again | \`catchTag("X", ...)\`, the rest stays in \`E\` |
+| A case is not caught | Compiles, then crashes in production | Compiles only if the type of the caller permits the case |
+| See what happened | Lost after the \`catch\` | \`Exit\` and \`Cause\` are plain values |
 
-In this section you will define errors, recover from them by tag or by condition, deal with defects, and read the full outcome. Retries and schedules come later.
+In this section you define errors, recover from them by tag or by condition, process defects, and read the full outcome. Retries and schedules come in a later section.
 `,
   lessons: [
     {
       id: "error-management-l1",
       title: "Two kinds of failure, and a third reason",
       explain: `
-Here is a bug that plain TypeScript makes easy. A function throws \`NotFound\` when a user is missing. The caller wraps it in \`try/catch\` and shows "user not found". One day a typo inside the function throws a \`TypeError\` instead. The same \`catch\` runs, the same message shows, and the bug ships.
+Plain TypeScript makes this bug easy. A function throws \`NotFound\` when a user does not exist. The caller wraps the function in \`try/catch\` and shows "user not found". One day, a typo inside the function throws a \`TypeError\`. The same \`catch\` block runs, the same message shows, and the bug goes to production.
 
-Effect keeps the two apart from the start:
+Effect keeps the 2 kinds apart from the start:
 
 - \`Effect.fail(e)\` is an **expected failure**. It goes into the \`E\` type parameter.
-- \`Effect.die(x)\` is a **defect**, a bug. So is any exception thrown inside \`Effect.sync\`. Defects are not in the type; \`E\` stays \`never\`.
-- **Interruption** is the third reason: the fiber running the effect was cancelled.
+- \`Effect.die(x)\` is a **defect**, a bug. An exception thrown inside \`Effect.sync\` is also a defect. Defects are not in the type. \`E\` stays \`never\`.
+- An **interrupt** is the third reason: code outside the effect stopped the fiber that runs it. A fiber is the unit of execution that runs an effect.
 
-When an effect does not succeed, its \`Exit\` holds a \`Cause\`, and \`cause.reasons\` is an array of reasons, each tagged \`Fail\`, \`Die\`, or \`Interrupt\`. The program below shows all four ways of not succeeding and what they look like.
+When an effect does not succeed, its \`Exit\` holds a \`Cause\`. \`cause.reasons\` is an array of reasons. Each reason has a tag: \`Fail\`, \`Die\`, or \`Interrupt\`. The program below shows all 4 ways in which an effect does not succeed, and how each one looks.
 `,
       code: `import { Effect, Exit } from "effect"
 
@@ -83,13 +83,13 @@ for (const [name, effect] of Object.entries(cases)) {
 thrown -> Die
 die -> Die
 interrupt -> Interrupt`,
-      after: `Notice that the thrown \`TypeError\` and \`Effect.die\` look the same: both are \`Die\`. Only \`Effect.fail\` shows up in the type as \`string\`. Try replacing \`Effect.sync\` in the \`thrown\` case with \`Effect.try({ try: ..., catch: () => "typed now" })\`: the reason becomes \`Fail\`, because you told Effect the throw was expected.`
+      after: `Notice that the thrown \`TypeError\` and \`Effect.die\` look the same: both are \`Die\`. Only \`Effect.fail\` appears in the type, as \`string\`. Replace \`Effect.sync\` in the \`thrown\` case with \`Effect.try({ try: ..., catch: () => "typed now" })\`. The reason becomes \`Fail\`, because you told Effect that the throw is expected.`
     },
     {
       id: "error-management-l2",
       title: "Defining errors: tagged classes you can yield",
       explain: `
-In plain TypeScript a custom error is a class that extends \`Error\`, and you \`throw\` it. Nothing in the signature mentions it:
+In plain TypeScript, a custom error is a class that extends \`Error\`, and you \`throw\` it. The signature does not mention it:
 
 \`\`\`ts
 class NotFound extends Error {
@@ -103,9 +103,9 @@ function loadName(id: number): string {   // says nothing about NotFound
 }
 \`\`\`
 
-Effect errors are classes too, with two differences. First, they carry a \`_tag\`: a string literal that names the error and lets Effect (and TypeScript) tell error types apart in a union. Second, they are **yieldable**: inside \`Effect.gen\` you write \`yield* new NotFound({ id })\` and the effect fails with that error. It reads like \`throw\`, but the error lands in the \`E\` type, not in the void.
+Effect errors are classes too, with 2 differences. First, they have a \`_tag\`: a string literal that names the error. Effect and TypeScript use the tag to tell error types apart in a union. Second, you can yield them. Inside \`Effect.gen\`, you write \`yield* new NotFound({ id })\`, and the effect fails with that error. This reads like \`throw\`, but the error goes into the \`E\` type.
 
-Two ways to define one. \`Schema.TaggedError\` is preferred: fields are declared as schemas, so the error can later be validated or sent over the wire. \`Data.TaggedError\` is lighter and takes a plain field type. Both fill in \`_tag\` for you.
+There are 2 ways to define an error. \`Schema.TaggedError\` is the preferred way. You declare the fields as schemas, so you can validate the error later or send it over a network. \`Data.TaggedError\` is smaller and takes a plain field type. Both set \`_tag\` for you.
 `,
       code: `import { Cause, Data, Effect, Exit, Schema } from "effect"
 
@@ -152,26 +152,26 @@ for (const id of [1, 2, 3]) {
       expectedOutput: `1 ok Ada
 2 Forbidden role guest
 3 NotFound id 3`,
-      after: `Hover \`loadName\` in an editor: TypeScript collected both errors from the two \`yield*\` lines into \`NotFound | Forbidden\`. Try changing \`yield* new NotFound({ id })\` to \`throw new NotFound({ id })\`. It still compiles, but the error disappears from the type and becomes a \`Die\`. Challenge 5 is about exactly this mistake.`
+      after: `Hover over \`loadName\` in an editor. TypeScript collected both errors from the 2 \`yield*\` lines into \`NotFound | Forbidden\`. Change \`yield* new NotFound({ id })\` to \`throw new NotFound({ id })\`. The code still compiles, but the error disappears from the type and becomes a \`Die\`. Challenge 5 is about this mistake.`
     },
     {
       id: "error-management-l3",
       title: "Recovering by tag: catch, catchTag, catchTags",
       explain: `
-Once errors have tags, recovery is a lookup, not an \`instanceof\` chain. Each function below removes what it handles from \`E\` and leaves the rest.
+When errors have tags, recovery is a lookup by tag, not a chain of \`instanceof\` checks. Each function below removes the errors that it catches from \`E\` and keeps the rest.
 
-| Function | Handles | \`E\` afterwards |
+| Function | Catches | \`E\` afterwards |
 |---|---|---|
-| \`Effect.catch(f)\` | Every failure | Whatever \`f\` can fail with |
-| \`Effect.catchTag("A", f)\` | Only errors tagged \`A\` | The union without \`A\` |
+| \`Effect.catch(f)\` | Every failure | The failure type of \`f\` |
+| \`Effect.catchTag("A", f)\` | Only errors with tag \`A\` | The union without \`A\` |
 | \`Effect.catchTag(["A", "B"], f)\` | \`A\` or \`B\`, one handler | The union without \`A\` and \`B\` |
-| \`Effect.catchTags({ A: f, B: g })\` | Several tags, one handler each | The union without those tags |
-| \`Effect.catchIf(pred, f)\` | Errors matching a condition | Lesson 4 |
-| \`Effect.catchFilter(filter, f)\` | Errors matching a \`Filter\` | Lesson 4 |
+| \`Effect.catchTags({ A: f, B: g })\` | Several tags, one handler for each | The union without those tags |
+| \`Effect.catchIf(pred, f)\` | Errors that satisfy a condition | Lesson 4 |
+| \`Effect.catchFilter(filter, f)\` | Errors that satisfy a \`Filter\` | Lesson 4 |
 
-The handler receives the error, already narrowed to the matching class, and returns a new Effect. That Effect's success type is merged into \`A\` and its error type into \`E\`. If the handler returns \`Effect.succeed(...)\`, the tag is gone from \`E\` for good. This is the shrinking error channel from the intro, and the return type annotations in the code make it visible.
+The handler receives the error, already narrowed to the matched class, and returns a new effect. The success type of this effect is added to \`A\`, and its error type is added to \`E\`. If the handler returns \`Effect.succeed(...)\`, the tag is removed from \`E\`. This is the smaller error type from the intro. The return type annotations in the code make it visible.
 
-Note the name: \`catchAll\` from older Effect versions is now \`Effect.catch\`.
+Note: \`catchAll\` from older Effect versions is now \`Effect.catch\`.
 `,
       code: `import { Effect, Schema } from "effect"
 
@@ -215,18 +215,18 @@ for (const id of [1, 2, 3, 4]) {
 2 hidden (guest) | no access: Forbidden
 3 slow (500ms) | other: Timeout
 4 nobody #4 | no access: NotFound`,
-      after: `Delete the \`Timeout\` handler inside \`catchTags\`. \`safeName\` stops compiling: \`Timeout\` is still in \`E\`, but the annotation promised \`never\`. That is the compiler doing the bookkeeping a code reviewer used to do.`
+      after: `Delete the \`Timeout\` handler inside \`catchTags\`. \`safeName\` no longer compiles: \`Timeout\` is still in \`E\`, but the annotation declares \`never\`. The compiler does the check that a code reviewer did before.`
     },
     {
       id: "error-management-l4",
       title: "Recovering by condition, and translating errors",
       explain: `
-Sometimes the tag is not enough. An \`HttpError\` with status 503 deserves a cached fallback; the same class with status 404 does not. Two tools look at the error value:
+Sometimes the tag is not enough. An \`HttpError\` with status 503 can use a cached fallback. The same class with status 404 cannot. 2 functions look at the error value:
 
-- \`Effect.catchIf(predicate, handler)\`. With a plain boolean predicate, \`E\` does **not** shrink: a 404 is still an \`HttpError\` that can come out. With a type guard (\`(e): e is HttpError => ...\`), the matched class is removed from \`E\`, so only use a guard when the guard really catches every value of that class.
-- \`Effect.catchFilter(filter, handler)\`. A \`Filter\` (from the \`Filter\` module) is a reusable, named version of the same idea. \`Filter.tagged("ParseError")\` matches a tag and narrows correctly; \`Filter.fromPredicate(fn)\` wraps a boolean function.
+- \`Effect.catchIf(predicate, handler)\`. With a plain boolean predicate, \`E\` does **not** become smaller. A 404 is still an \`HttpError\` that can come out. With a type guard (\`(e): e is HttpError => ...\`), Effect removes the matched class from \`E\`. Use a guard only when the guard matches every value of that class.
+- \`Effect.catchFilter(filter, handler)\`. A \`Filter\` (from the \`Filter\` module) is a reusable, named version of the same idea. \`Filter.tagged("ParseError")\` matches a tag and narrows the type correctly. \`Filter.fromPredicate(fn)\` wraps a boolean function.
 
-The third tool does not recover at all. \`Effect.mapError(f)\` replaces the error with another value. Use it at a boundary: a low-level \`HttpError\` becomes your domain's \`AppError\`, and callers only ever see the domain error. Get this wrong and every caller has to know about HTTP.
+The third function does not recover at all. \`Effect.mapError(f)\` replaces the error with another value. Use it at a boundary. A low-level \`HttpError\` becomes the \`AppError\` of your domain, and callers see only the domain error. Without this step, every caller must know about HTTP.
 `,
       code: `import { Cause, Effect, Exit, Filter, Schema } from "effect"
 
@@ -264,26 +264,26 @@ for (const status of [200, 503, 0, 404]) {
 503 cached copy
 0 empty (could not parse <html>)
 404 AppError: request failed with 404`,
-      after: `Inside the \`mapError\` handler, \`e\` is typed as \`HttpError\` only, because \`catchFilter\` already removed \`ParseError\`. Try swapping steps 2 and 3: the \`mapError\` handler now has to deal with both classes, and \`e.status\` no longer compiles.`
+      after: `Inside the \`mapError\` handler, the type of \`e\` is only \`HttpError\`, because \`catchFilter\` already removed \`ParseError\`. Swap steps 2 and 3. The \`mapError\` handler must now process both classes, and \`e.status\` no longer compiles.`
     },
     {
       id: "error-management-l5",
       title: "Turning a failure into a plain value",
       explain: `
-Every function so far replaced a failure with another Effect. Often you want something simpler: a default, or "give me both outcomes as data and let me decide". This family turns a failing Effect into one that cannot fail.
+Every function so far replaced a failure with another effect. Often you want a simpler result: a default value, or both outcomes as data. This family changes an effect that can fail into an effect that cannot fail.
 
 | Function | Use when | Result type |
 |---|---|---|
-| \`Effect.orElseSucceed(() => x)\` | Any failure should become a default value | \`Effect<A \\| X, never>\` |
-| \`Effect.match({ onFailure, onSuccess })\` | Both outcomes map to a plain value | \`Effect<B, never>\` |
-| \`Effect.matchEffect({ onFailure, onSuccess })\` | Same, but the handlers need to run Effects | \`Effect<B, E2>\` |
-| \`Effect.result(effect)\` | Keep the error for later inspection | \`Effect<Result<A, E>, never>\` |
-| \`Effect.option(effect)\` | You only care whether it worked | \`Effect<Option<A>, never>\` |
-| \`Effect.ignore(effect)\` | Fire and forget, discard everything | \`Effect<void, never>\` |
+| \`Effect.orElseSucceed(() => x)\` | Every failure must become a default value | \`Effect<A \\| X, never>\` |
+| \`Effect.match({ onFailure, onSuccess })\` | Both outcomes become a plain value | \`Effect<B, never>\` |
+| \`Effect.matchEffect({ onFailure, onSuccess })\` | Same, but the handlers run effects | \`Effect<B, E2>\` |
+| \`Effect.result(effect)\` | You keep the error for a later check | \`Effect<Result<A, E>, never>\` |
+| \`Effect.option(effect)\` | You only want to know if the effect succeeded | \`Effect<Option<A>, never>\` |
+| \`Effect.ignore(effect)\` | You discard both outcomes | \`Effect<void, never>\` |
 
-\`Result\` is Effect's "success or failure" data type (older versions called it \`Either\`). \`Option\` is "a value or nothing". Both have \`isSuccess\` / \`isSome\` style guards.
+\`Result\` is the Effect data type for "success or failure" (older versions called it \`Either\`). \`Option\` is the data type for "a value or nothing". Both have guards such as \`isSuccess\` and \`isSome\`.
 
-Remember: like \`catch\`, all of these see **failures only**. A defect still passes straight through them.
+Note: like \`catch\`, all of these functions see **failures only**. A defect passes through them.
 `,
       code: `import { Effect, Option, Result, Schema } from "effect"
 
@@ -334,21 +334,21 @@ no font setting, using default
 result: failed with NotFound
 option: dark
 still running`,
-      after: `\`Effect.result\` is the clean answer to the last problem in Getting Started, where you had to run a nested \`runPromiseExit\`. Try replacing \`get("theme")\` in the \`option\` line with \`get("size")\`: you get \`none\`, and no way to know why. Reach for \`result\` when the reason matters.`
+      after: `\`Effect.result\` is the clean answer to the last problem in Getting Started, where you ran a nested \`runPromiseExit\`. Replace \`get("theme")\` in the \`option\` line with \`get("size")\`. You get \`none\`, and you cannot know why. Use \`result\` when the reason is important.`
     },
     {
       id: "error-management-l6",
       title: "Defects: the errors that catch does not see",
       explain: `
-A developer wraps a lookup in \`Effect.catch\` with a fallback and moves on, confident that "anything that goes wrong" is handled. Then a user id that is not in the table hits a \`!\` that was a lie, a \`TypeError\` is thrown, and the program crashes anyway. The fallback never ran.
+A developer wraps a lookup in \`Effect.catch\` with a fallback. The developer thinks that every problem is now caught. Then a user id that is not in the table reaches a \`!\` assertion that is not true. The code throws a \`TypeError\`, and the program crashes. The fallback did not run.
 
-That is by design. The throw happened inside \`Effect.sync\`, so it is a defect, and \`E\` for that effect is \`never\`. \`Effect.catch\`, \`catchTag\`, \`match\`, \`result\` and friends only look at \`E\`. A defect means the program is in a state nobody planned for, so hiding it behind a default would be exactly the plain TypeScript bug from lesson 1.
+This is the intended behavior. The throw happened inside \`Effect.sync\`, so it is a defect, and \`E\` for that effect is \`never\`. \`Effect.catch\`, \`catchTag\`, \`match\`, \`result\`, and the related functions look only at \`E\`. A defect means that the program is in a state that nobody planned for. A default value would hide the defect, and this is the plain TypeScript bug from lesson 1.
 
-When you do want to deal with defects, say so explicitly:
+When you want to process defects, say so explicitly:
 
 - \`Effect.catchDefect(f)\` sees only defects. \`f\` receives the thrown value as \`unknown\`.
-- \`Effect.catchCause(f)\` sees the whole \`Cause\`: failures, defects, and interruptions together. Use it for logging at the top of an app.
-- \`Cause.pretty(cause)\` renders a readable report. Its first line is \`Name: message\`; the rest is a stack trace.
+- \`Effect.catchCause(f)\` sees the whole \`Cause\`: failures, defects, and interrupts together. Use it for logs at the top of an application.
+- \`Cause.pretty(cause)\` makes a readable report. Its first line is \`Name: message\`. The rest is a stack trace.
 `,
       code: `import { Cause, Effect, Exit } from "effect"
 
@@ -387,21 +387,21 @@ console.log("reported:", Effect.runSync(reported))
 guarded: recovered from a TypeError
 report: Error: unreachable: cart already paid
 reported: recovered`,
-      after: `The honest fix for \`findName\` is not \`catchDefect\`, it is to stop lying: return \`Effect.fail(new NotFound({ id }))\` when the row is missing, so the case becomes a typed failure. Keep \`catchDefect\` and \`catchCause\` for boundaries such as request handlers and plugin loaders, where a crash should become a log line and a 500 instead of taking the process down.`
+      after: `The correct fix for \`findName\` is not \`catchDefect\`. The correct fix is to return \`Effect.fail(new NotFound({ id }))\` when the row does not exist. Then the case becomes a typed failure. Keep \`catchDefect\` and \`catchCause\` for boundaries such as request handlers and plugin loaders. At a boundary, a crash must become a log line and a 500 response, not a process exit.`
     },
     {
       id: "error-management-l7",
       title: "Errors with reasons: catchReason, catchReasons, unwrapReason",
       explain: `
-Some errors are two-level. A payment step fails with one \`PaymentError\`, but the *reason* varies: card declined, not enough funds, gateway down. Flattening them into three top-level errors loses the "this came from the payment step" information; a single error with a string \`reason\` loses the types. Effect v4 supports the middle path: a tagged error with a \`reason\` field that is itself a tagged union.
+Some errors have 2 levels. A payment step fails with one \`PaymentError\`, but the *reason* varies: card declined, not enough funds, gateway down. If you make 3 top-level errors, you lose the information that the payment step failed. If you make one error with a string \`reason\`, you lose the types. Effect v4 supports a middle path: a tagged error with a \`reason\` field that is itself a tagged union.
 
 | Function | What it does | \`E\` afterwards |
 |---|---|---|
-| \`catchReason("PaymentError", "CardDeclined", f, orElse?)\` | Handle one reason | \`PaymentError\` stays (other reasons can still occur) |
-| \`catchReasons("PaymentError", { A: f, B: g }, orElse?)\` | Handle several reasons | \`PaymentError\` stays unless \`orElse\` covers the rest |
-| \`unwrapReason("PaymentError")\` | Replace the parent with its reasons | \`A \\| B \\| C\`, ready for \`catchTags\` |
+| \`catchReason("PaymentError", "CardDeclined", f, orElse?)\` | Catches one reason | \`PaymentError\` stays (other reasons can still occur) |
+| \`catchReasons("PaymentError", { A: f, B: g }, orElse?)\` | Catches several reasons | \`PaymentError\` stays unless \`orElse\` catches the rest |
+| \`unwrapReason("PaymentError")\` | Replaces the parent with its reasons | \`A \\| B \\| C\`, ready for \`catchTags\` |
 
-The handlers receive the **reason** object, already narrowed, not the outer error. The optional last argument, \`orElse\`, gets the reasons you did not list, and when it is present the parent error leaves \`E\` entirely.
+The handlers receive the **reason** object, already narrowed, not the outer error. The optional last argument, \`orElse\`, gets the reasons that you did not list. When \`orElse\` is present, the parent error leaves \`E\`.
 `,
       code: `import { Effect, Schema } from "effect"
 
@@ -454,14 +454,56 @@ console.log("unwrapped(900):", Effect.runSync(unwrapped(900)))
 900 -> later: GatewayDown
 one(80): top up 30
 unwrapped(900): retry in 30s`,
-      after: `Try removing the \`orElse\` argument from \`many\`. The annotation \`Effect<string, never>\` no longer compiles, because a \`PaymentError\` with reason \`GatewayDown\` can still come out. Reasons let you keep "where it failed" and "why" in one value, and still get exhaustive checking.`
+      after: `Remove the \`orElse\` argument from \`many\`. The annotation \`Effect<string, never>\` no longer compiles, because a \`PaymentError\` with reason \`GatewayDown\` can still come out. Reasons keep "which step failed" and "why" in one value, and the compiler still checks that you caught every case.`
+    }
+  ],
+  dosAndDonts: [
+    {
+      do: "Use `Effect.fail` (or `yield*` on a tagged error) for an expected failure.",
+      dont: "Do not use `throw` or `Effect.die` for a case that a caller must process.",
+      why: "A throw or `Effect.die` makes a defect that is not in `E`, so callers cannot see it or catch it by tag."
+    },
+    {
+      do: "Define errors with `Schema.TaggedError` and a unique `_tag`.",
+      dont: "Do not fail with plain strings or classes that extend `Error` without a tag.",
+      why: "Without a `_tag`, `catchTag` and `catchTags` cannot select one error from the union."
+    },
+    {
+      do: "Inside `Effect.gen`, write `return yield* new NotFound({ id })` to fail.",
+      dont: "Do not write `throw new NotFound({ id })` inside `Effect.gen`.",
+      why: "A `throw` inside the generator becomes a defect, the error leaves the type, and `catchTag` cannot see it."
+    },
+    {
+      do: "Catch one error at a time with `Effect.catchTag`, or several with `Effect.catchTags`.",
+      dont: "Do not use `Effect.catch` with an `instanceof` chain inside the handler.",
+      why: "`Effect.catch` removes every failure from `E`, so the compiler no longer reports the cases that you did not process."
+    },
+    {
+      do: "Annotate the return type, for example `Effect.Effect<string, never>`, after you catch every error.",
+      dont: "Do not declare `never` in `E` while one tag is still not caught.",
+      why: "The compiler rejects the annotation, and this type error is the only sign of the case that is not caught."
+    },
+    {
+      do: "Use `Effect.mapError` at a boundary to change a low-level error into a domain error.",
+      dont: "Do not let a low-level error such as a plain string pass through a domain function.",
+      why: "Every caller then must know the low-level detail, and `catchTag` on the domain error does not match."
+    },
+    {
+      do: "Use `Effect.catchDefect` or `Effect.catchCause` only at a boundary, such as a request handler.",
+      dont: "Do not use `Effect.catchDefect` to hide a bug with a default value.",
+      why: "A defect is a state that nobody planned for, and a default value hides the bug in the same way that plain `try/catch` does."
+    },
+    {
+      do: "Use `Effect.exit` and read `cause.reasons` when you need to see defects and interrupts.",
+      dont: "Do not use `Effect.option` or `Effect.result` when a defect is possible and important.",
+      why: "`option` and `result` capture only typed failures, and a defect still fails the outer effect."
     }
   ],
   challenges: [
     {
       id: "error-management-c1",
       title: "A name from the past",
-      task: `This program uses a function name from Effect v3 and does not compile. Fix the name so it prints \`recovered: boom\`.`,
+      task: `This program uses a function name from Effect v3, and it does not compile. Correct the name so that the program prints \`recovered: boom\`.`,
       code: `import { Effect } from "effect"
 
 const program = Effect.fail("boom").pipe(
@@ -480,16 +522,16 @@ console.log(Effect.runSync(program))
 `,
       expectedOutput: `recovered: boom`,
       hints: [
-        "Read the type error: which property does not exist on Effect?",
+        "Read the type error. Which property does not exist on Effect?",
         "The v4 rule: catchAll became catch, catchAllCause became catchCause, catchAllDefect became catchDefect.",
         "Replace Effect.catchAll with Effect.catch."
       ],
-      explanation: `Effect v4 shortened the whole family: \`catchAll\` is now \`Effect.catch\`, \`catchAllCause\` is \`catchCause\`, and \`catchAllDefect\` is \`catchDefect\`. The public website still documents v3 names, so this mistake is common. The compiler caught it before anything ran, which is the same safety you get for every other typo in a function name.`
+      explanation: `Effect v4 made the names shorter: \`catchAll\` is now \`Effect.catch\`, \`catchAllCause\` is \`catchCause\`, and \`catchAllDefect\` is \`catchDefect\`. The public website still documents the v3 names, so this mistake is common. The compiler found the error before the code ran. This is the same safety that you get for every other typo in a function name.`
     },
     {
       id: "error-management-c2",
       title: "The tag that does not exist",
-      task: `\`catchTag\` is given a tag that no error in the program has, so it does not compile and would not match at runtime either. Fix the tag so the program prints \`missing user 7\`.`,
+      task: `\`catchTag\` receives a tag that no error in the program has. The program does not compile, and the tag does not match at run time either. Correct the tag so that the program prints \`missing user 7\`.`,
       code: `import { Effect, Schema } from "effect"
 
 class NotFound extends Schema.TaggedError<NotFound>()("NotFound", { id: Schema.Number }) {}
@@ -519,15 +561,15 @@ console.log(Effect.runSync(program))
       expectedOutput: `missing user 7`,
       hints: [
         "Where does the tag string come from? Look at the first argument of Schema.TaggedError.",
-        "The tag in catchTag must be one of the _tag values in the error channel, here just one.",
+        "The tag in catchTag must be one of the _tag values in the error type. Here there is only one.",
         "Use \"NotFound\", the tag declared on the class."
       ],
-      explanation: `\`catchTag\` only accepts tags that exist in the effect's \`E\` type. The class was declared with the tag \`"NotFound"\`, so \`"UserNotFound"\` is rejected at compile time. In plain TypeScript, a wrong string in an \`if (e.name === "UserNotFound")\` check would compile and silently never match. Tags are checked strings.`
+      explanation: `\`catchTag\` accepts only tags that exist in the \`E\` type of the effect. The class declares the tag \`"NotFound"\`, so the compiler rejects \`"UserNotFound"\`. In plain TypeScript, a wrong string in an \`if (e.name === "UserNotFound")\` check compiles, and the check never matches. Tags are checked strings.`
     },
     {
       id: "error-management-c3",
       title: "The annotation that promises too much",
-      task: `\`safeName\` claims it cannot fail, but only one of the two errors is handled, so it does not compile. Handle \`Forbidden\` too, succeeding with the string \`"hidden"\`. The printed output must stay exactly as shown.`,
+      task: `\`safeName\` declares that it cannot fail, but the code catches only one of the 2 errors. Thus it does not compile. Catch \`Forbidden\` too, and succeed with the string \`"hidden"\`. The printed output must stay the same as shown.`,
       code: `import { Effect, Schema } from "effect"
 
 class NotFound extends Schema.TaggedError<NotFound>()("NotFound", { id: Schema.Number }) {}
@@ -570,16 +612,16 @@ console.log(Effect.runSync(safeName(3)))
       expectedOutput: `Ada
 nobody #3`,
       hints: [
-        "The program runs fine for ids 1 and 3. The compiler is complaining about a case that could happen, not one that did.",
-        "After catchTag(\"NotFound\") the error channel is Forbidden, and the annotation says never.",
-        "Add a Forbidden handler: either a second Effect.catchTag(\"Forbidden\", ...) or switch to Effect.catchTags with both keys."
+        "The program runs correctly for ids 1 and 3. The compiler reports a case that can happen, not a case that did happen.",
+        "After catchTag(\"NotFound\"), the error type is Forbidden, and the annotation says never.",
+        "Add a Forbidden handler: a second Effect.catchTag(\"Forbidden\", ...), or Effect.catchTags with both keys."
       ],
-      explanation: `Nothing goes wrong at runtime with the ids used here, and that is the point. In plain TypeScript this code would ship and crash the first time id 2 came through. Effect refuses to compile a function annotated \`Effect<string, never>\` while \`Forbidden\` is still in \`E\`. Handling the second tag shrinks \`E\` to \`never\` and the annotation becomes true. Bugs that a type error catches are the cheapest bugs you will ever fix.`
+      explanation: `Nothing goes wrong at run time with the ids in this program. This is the point. In plain TypeScript, this code goes to production and crashes the first time that id 2 arrives. Effect refuses to compile a function with the annotation \`Effect<string, never>\` while \`Forbidden\` is still in \`E\`. When you catch the second tag, \`E\` becomes \`never\`, and the annotation becomes true. A bug that a type error finds is the cheapest bug to fix.`
     },
     {
       id: "error-management-c4",
       title: "The fallback that never runs",
-      task: `\`parseCount\` throws on bad input, so the program crashes even though it has a fallback. Do not change \`parseCount\`. Change how the failure is caught so the program prints \`count: 0 (fallback)\`.`,
+      task: `\`parseCount\` throws on bad input, so the program crashes, although it has a fallback. Do not change \`parseCount\`. Change the way that the code catches the failure, so that the program prints \`count: 0 (fallback)\`.`,
       code: `import { Effect } from "effect"
 
 const parseCount = (raw: string) =>
@@ -614,16 +656,16 @@ console.log(Effect.runSync(program))
 `,
       expectedOutput: `count: 0 (fallback)`,
       hints: [
-        "What is the error type of parseCount? Hover it: E is never. So what can Effect.catch possibly catch?",
-        "A throw inside Effect.sync is a defect, not a failure. Lesson 6 lists the two functions that see defects.",
+        "What is the error type of parseCount? Hover over it: E is never. What can Effect.catch see?",
+        "A throw inside Effect.sync is a defect, not a failure. Lesson 6 lists the 2 functions that see defects.",
         "Replace Effect.catch with Effect.catchDefect (or Effect.catchCause)."
       ],
-      explanation: `\`Effect.sync\` promises no throw, so the exception became a defect and \`E\` stayed \`never\`. \`Effect.catch\` only looks at \`E\`, and there was nothing there to catch. \`catchDefect\` is the explicit opt-in for handling bugs. The better long-term fix is to make the failure typed with \`Effect.try\` or \`Effect.fail\`, so ordinary \`catch\` works and the signature tells the truth; but when you cannot change the code that throws, \`catchDefect\` is the right tool.`
+      explanation: `\`Effect.sync\` declares that the function does not throw. Thus the exception became a defect, and \`E\` stayed \`never\`. \`Effect.catch\` looks only at \`E\`, and \`E\` had nothing to catch. \`catchDefect\` is the explicit way to catch bugs. The better long-term fix is a typed failure with \`Effect.try\` or \`Effect.fail\`. Then the normal \`catch\` works, and the signature is correct. When you cannot change the code that throws, \`catchDefect\` is the correct tool.`
     },
     {
       id: "error-management-c5",
       title: "throw is not yield*",
-      task: `The generator uses \`throw\` to signal a missing user, so the error becomes a defect and \`catchTag\` cannot see it (it does not even compile). Fail the effect the Effect way so the program prints the two lines below.`,
+      task: `The generator uses \`throw\` to report a user that does not exist. Thus the error becomes a defect, and \`catchTag\` cannot see it. The program does not compile. Make the effect fail in the Effect way, so that the program prints the 2 lines below.`,
       code: `import { Effect, Schema } from "effect"
 
 class NotFound extends Schema.TaggedError<NotFound>()("NotFound", { id: Schema.Number }) {}
@@ -669,16 +711,16 @@ console.log(Effect.runSync(describe(2)))
       expectedOutput: `Ada
 no user with id 2`,
       hints: [
-        "Hover loadName: its error type is never. The throw did not put NotFound into the type.",
-        "Tagged errors are yieldable. Lesson 2 shows the keyword that fails an effect with an error instance.",
+        "Hover over loadName: its error type is never. The throw did not put NotFound into the type.",
+        "You can yield tagged errors. Lesson 2 shows the keyword that fails an effect with an error instance.",
         "Replace throw new NotFound({ id }) with return yield* new NotFound({ id })."
       ],
-      explanation: `Inside \`Effect.gen\`, \`throw\` is the same as a throw anywhere else: it is a defect, invisible to the type and to \`catchTag\`. That is why \`catchTag("NotFound", ...)\` refused to compile: there is no \`NotFound\` in an \`E\` of \`never\`. \`yield*\` on an error instance is the typed equivalent of \`throw\`: it stops the generator, puts \`NotFound\` into \`E\`, and lets every catch function downstream see it. The \`return\` in front is only there so TypeScript knows the function does not continue.`
+      explanation: `Inside \`Effect.gen\`, \`throw\` is the same as a throw in any other place. It is a defect. The type does not show it, and \`catchTag\` does not see it. This is why \`catchTag("NotFound", ...)\` did not compile: there is no \`NotFound\` in an \`E\` of \`never\`. \`yield*\` on an error instance is the typed equivalent of \`throw\`. It stops the generator, puts \`NotFound\` into \`E\`, and lets every catch function after it see the error. The \`return\` in front only tells TypeScript that the function does not continue.`
     },
     {
       id: "error-management-c6",
       title: "Translate at the boundary",
-      task: `\`loadConfig\` promises to fail only with \`ConfigError\`, but \`readFile\` fails with a plain string, so the program does not compile. Make the promise true without changing \`readFile\` or the annotation. The output must stay exactly as shown.`,
+      task: `\`loadConfig\` declares that it fails only with \`ConfigError\`, but \`readFile\` fails with a plain string. Thus the program does not compile. Make the declaration true. Do not change \`readFile\` or the annotation. The output must stay the same as shown.`,
       code: `import { Effect, Schema } from "effect"
 
 class ConfigError extends Schema.TaggedError<ConfigError>()("ConfigError", { message: Schema.String }) {}
@@ -726,16 +768,16 @@ Effect.runSync(program)
       expectedOutput: `loaded {"port":8080}
 fallback {}`,
       hints: [
-        "Read the error: string is not assignable to ConfigError. The error channel needs to change, not the success.",
-        "You do not want to recover here, only to change the error's type. Lesson 4 has a function for that.",
+        "Read the error: string is not assignable to ConfigError. The error type must change, not the success type.",
+        "You do not want to recover here. You only want to change the type of the error. Lesson 4 has a function for this.",
         "Pipe readFile(path) through Effect.mapError((message) => new ConfigError({ message }))."
       ],
-      explanation: `\`mapError\` is \`map\` for the error channel: it turns the string into a \`ConfigError\` and leaves success untouched. The program printed the same thing before and after, so this is a fix you would only find through the type. Without it, every caller of \`loadConfig\` would have to know that the file system speaks in strings. With it, the low-level detail is sealed at the boundary, and callers can use \`catchTag("ConfigError", ...)\` with confidence.`
+      explanation: `\`mapError\` is \`map\` for the error type. It changes the string into a \`ConfigError\` and does not touch the success value. The program printed the same output before and after the fix. Thus only the type shows this problem. Without the fix, every caller of \`loadConfig\` must know that the file system fails with strings. With the fix, the low-level detail stays at the boundary, and callers can use \`catchTag("ConfigError", ...)\`.`
     },
     {
       id: "error-management-c7",
       title: "Reasons stay wrapped",
-      task: `The handlers in \`catchTags\` are written for the reasons, but the effect fails with the outer \`ApiError\`, so they never match and the program does not compile. Add one step before \`catchTags\` so the program prints the three lines below.`,
+      task: `The handlers in \`catchTags\` are written for the reasons, but the effect fails with the outer \`ApiError\`. Thus the handlers never match, and the program does not compile. Add one step before \`catchTags\` so that the program prints the 3 lines below.`,
       code: `import { Effect, Schema } from "effect"
 
 class RateLimited extends Schema.TaggedError<RateLimited>()("RateLimited", { retryAfter: Schema.Number }) {}
@@ -787,16 +829,16 @@ for (const n of [1, 2, 3]) console.log(Effect.runSync(describe(n)))
 wait 30s
 need scope orders:read`,
       hints: [
-        "What is in the error channel of call(n)? Only ApiError. catchTags looks for tags in that channel.",
+        "What is in the error type of call(n)? Only ApiError. catchTags looks for tags in that type.",
         "Lesson 7 has a function that replaces a parent error with its reasons.",
         "Add Effect.unwrapReason(\"ApiError\") as the first step of the pipe."
       ],
-      explanation: `\`catchTags\` matches on the \`_tag\` of the error in \`E\`, and that tag is \`"ApiError"\`. The reason tags live one level down. \`unwrapReason("ApiError")\` promotes them: \`E\` becomes \`RateLimited | Unauthorized\`, the \`catchTags\` keys line up, and because both are handled \`E\` ends as \`never\`. The alternative that keeps the parent is \`catchReasons("ApiError", { ... })\`; use \`unwrapReason\` when the "where" no longer matters and only the "why" does.`
+      explanation: `\`catchTags\` matches the \`_tag\` of the error in \`E\`, and that tag is \`"ApiError"\`. The reason tags are one level down. \`unwrapReason("ApiError")\` moves them up: \`E\` becomes \`RateLimited | Unauthorized\`, and the \`catchTags\` keys match. Because the code catches both, \`E\` ends as \`never\`. The alternative that keeps the parent is \`catchReasons("ApiError", { ... })\`. Use \`unwrapReason\` when "which step failed" is no longer important and only "why" is important.`
     },
     {
       id: "error-management-c8",
       title: "Keep the reason",
-      task: `The report should say *why* a lookup failed, but the program only knows *that* it failed. Change the way the outcome is captured so it prints \`lang: NotFound\` on the second line, without changing \`get\`.`,
+      task: `The report must say *why* a lookup failed, but the program only knows *that* it failed. Change the way that the code captures the outcome, so that the second line prints \`lang: NotFound\`. Do not change \`get\`.`,
       code: `import { Effect, Option, Schema } from "effect"
 
 class NotFound extends Schema.TaggedError<NotFound>()("NotFound", { key: Schema.String }) {}
@@ -838,11 +880,11 @@ Effect.runSync(report("lang"))
       expectedOutput: `theme: dark
 lang: NotFound`,
       hints: [
-        "Effect.option turns a failure into None. Where did the NotFound value go?",
-        "Lesson 5's table has a sibling of option that keeps the error. It uses the Result type.",
+        "Effect.option changes a failure into None. Where did the NotFound value go?",
+        "The table in lesson 5 has a function related to option that keeps the error. It uses the Result type.",
         "Use Effect.result, then Result.isSuccess(outcome) ? outcome.success : outcome.failure._tag."
       ],
-      explanation: `\`Effect.option\` answers one question, "did it work?", and throws the error value away to do it. \`Effect.result\` keeps both sides as a \`Result<string, NotFound>\`, so the failure branch still has the typed error with its \`_tag\` and \`key\`. Pick \`option\` when the reason really does not matter, \`result\` when it does, and \`exit\` when you also need to see defects and interruptions.`
+      explanation: `\`Effect.option\` answers one question: did the effect succeed? It discards the error value. \`Effect.result\` keeps both sides as a \`Result<string, NotFound>\`. Thus the failure branch still has the typed error with its \`_tag\` and \`key\`. Use \`option\` when the reason is not important. Use \`result\` when the reason is important. Use \`exit\` when you also need to see defects and interrupts.`
     }
   ],
   problems: [
@@ -850,15 +892,15 @@ lang: NotFound`,
       id: "error-management-p1",
       title: "Checkout pipeline",
       spec: `
-Build a two-step checkout with typed errors.
+Build a checkout with 2 steps and typed errors.
 
 1. Define \`OutOfStock\` (field \`sku: string\`) and \`CardDeclined\` (field \`code: string\`) with \`Schema.TaggedError\`.
-2. \`reserve(order)\` fails with \`OutOfStock\` when the order's \`sku\` is \`"sku-9"\`, and succeeds with the order otherwise.
-3. \`charge(order)\` fails with \`CardDeclined\` with code \`"05"\` when \`order.total\` is over \`100\`, and succeeds with the string \`"receipt #" + order.id + " for " + order.total\` otherwise.
-4. \`checkout(order)\` runs \`reserve\` then \`charge\` with \`Effect.gen\`. Its type must be \`Effect<string, OutOfStock | CardDeclined>\`.
-5. \`describe(order)\` handles both errors with \`catchTags\` so its error type is \`never\`: \`OutOfStock\` becomes \`"out of stock: " + sku\`, \`CardDeclined\` becomes \`"card declined (code " + code + ")"\`.
+2. \`reserve(order)\` fails with \`OutOfStock\` when the \`sku\` of the order is \`"sku-9"\`. Otherwise it succeeds with the order.
+3. \`charge(order)\` fails with \`CardDeclined\` with code \`"05"\` when \`order.total\` is more than \`100\`. Otherwise it succeeds with the string \`"receipt #" + order.id + " for " + order.total\`.
+4. \`checkout(order)\` runs \`reserve\` and then \`charge\` with \`Effect.gen\`. Its type must be \`Effect<string, OutOfStock | CardDeclined>\`.
+5. \`describe(order)\` catches both errors with \`catchTags\`, so its error type is \`never\`. \`OutOfStock\` becomes \`"out of stock: " + sku\`. \`CardDeclined\` becomes \`"card declined (code " + code + ")"\`.
 
-Run \`describe\` on the three orders in the starter and print \`order.id + ": " + result\` for each. Exact output:
+Run \`describe\` on the 3 orders in the starter and print \`order.id + ": " + result\` for each order. Exact output:
 
 \`\`\`
 1: receipt #1 for 30
@@ -944,22 +986,22 @@ for (const order of orders) {
 2: out of stock: sku-9
 3: card declined (code 05)`,
       hints: [
-        "Each step is a small function with an explicit return type: Effect.Effect<Order, OutOfStock> and Effect.Effect<string, CardDeclined>. Annotate them, the compiler will guide you.",
-        "In checkout, yield* reserve first, then return yield* charge. The error types of both steps are collected into the union automatically.",
-        "catchTags takes an object whose keys are the tags. Once both are handled, describe can be annotated Effect.Effect<string, never> and it will compile."
+        "Each step is a small function with an explicit return type: Effect.Effect<Order, OutOfStock> and Effect.Effect<string, CardDeclined>. Annotate them. The compiler then guides you.",
+        "In checkout, yield* reserve first, then return yield* charge. Effect collects the error types of both steps into the union.",
+        "catchTags takes an object whose keys are the tags. When both are caught, describe can have the annotation Effect.Effect<string, never>, and it compiles."
       ]
     },
     {
       id: "error-management-p2",
       title: "Config file inspector",
       spec: `
-Classify every way a config load can end, by reading the \`Exit\`.
+Classify every way in which a config load can end. Read the \`Exit\` to do this.
 
-The starter gives you a fake file system \`files\` and a \`readFile(path)\` that already returns a typed effect: it fails with \`NotFound\` for unknown paths and \`Forbidden\` for \`"secret.json"\`. Add:
+The starter gives you a fake file system \`files\` and a \`readFile(path)\` that already returns a typed effect. It fails with \`NotFound\` for unknown paths and with \`Forbidden\` for \`"secret.json"\`. Add:
 
-1. \`parsePort(raw)\` that uses \`Effect.sync\` with \`JSON.parse(raw)\` and returns \`.port\` as a \`number\`. A corrupt file makes \`JSON.parse\` throw; leave that as a defect, it is a bug in the file, not an expected case.
-2. \`load(path)\` that reads then parses, with \`Effect.gen\`.
-3. \`inspect(path)\` that captures the outcome with \`Effect.exit\` and prints one line: \`path + " -> ok port " + port\` on success; otherwise, for each reason in \`cause.reasons\`, \`path + " -> failed: " + tag\` for a \`Fail\` (use the error's \`_tag\`) and \`path + " -> crashed: " + name\` for a \`Die\` (use the defect's \`.name\`, it is an \`Error\`).
+1. \`parsePort(raw)\` uses \`Effect.sync\` with \`JSON.parse(raw)\` and returns \`.port\` as a \`number\`. A corrupt file makes \`JSON.parse\` throw. Keep this as a defect. It is a bug in the file, not an expected case.
+2. \`load(path)\` reads and then parses, with \`Effect.gen\`.
+3. \`inspect(path)\` captures the outcome with \`Effect.exit\` and prints one line. On success, print \`path + " -> ok port " + port\`. Otherwise, print one line for each reason in \`cause.reasons\`. For a \`Fail\`, print \`path + " -> failed: " + tag\`, where \`tag\` is the \`_tag\` of the error. For a \`Die\`, print \`path + " -> crashed: " + name\`, where \`name\` is the \`.name\` of the defect. The defect is an \`Error\`.
 
 Run \`inspect\` on \`"app.json"\`, \`"missing.json"\`, \`"secret.json"\`, \`"corrupt.json"\` in that order. Exact output:
 
@@ -1052,22 +1094,22 @@ missing.json -> failed: NotFound
 secret.json -> failed: Forbidden
 corrupt.json -> crashed: SyntaxError`,
       hints: [
-        "Effect.exit(load(path)) never fails: yield* it to get an Exit value, then branch with Exit.isSuccess.",
-        "In the failure branch, loop over exit.cause.reasons. Each reason has a _tag of Fail, Die, or Interrupt; switch on it.",
-        "For a Fail reason, reason.error is typed NotFound | Forbidden so ._tag is available. For Die, reason.defect is unknown; cast it to Error to read .name."
+        "Effect.exit(load(path)) never fails. yield* it to get an Exit value, then branch with Exit.isSuccess.",
+        "In the failure branch, loop over exit.cause.reasons. Each reason has a _tag of Fail, Die, or Interrupt. Branch on the tag.",
+        "For a Fail reason, the type of reason.error is NotFound | Forbidden, so ._tag is available. For a Die, reason.defect is unknown. Cast it to Error to read .name."
       ]
     },
     {
       id: "error-management-p3",
       title: "Gateway status messages",
       spec: `
-An API client fails with one \`ApiError\` whose \`reason\` explains what happened. Turn each outcome into a message for the user.
+An API client fails with one \`ApiError\`. Its \`reason\` says what happened. Change each outcome into a message for the user.
 
-1. Define three reasons with \`Schema.TaggedError\`: \`RateLimited\` (\`retryAfter: number\`), \`Unauthorized\` (\`scope: string\`), \`Maintenance\` (\`until: string\`). Define \`ApiError\` with a \`reason\` field that is a \`Schema.Union\` of the three.
-2. \`call(n)\` returns \`Effect<string, ApiError>\`: \`n = 1\` succeeds with \`"ok 200"\`, \`n = 2\` fails with \`RateLimited\` (retryAfter 30), \`n = 3\` fails with \`Unauthorized\` (scope \`"orders:read"\`), anything else fails with \`Maintenance\` (until \`"06:00"\`).
-3. \`message(n)\` uses \`Effect.catchReasons\` to handle \`RateLimited\` as \`"wait " + retryAfter + "s"\` and \`Unauthorized\` as \`"need scope " + scope\`, and the catch-all third argument for any other reason as \`"try again after " + until\`. Its error type must be \`never\`.
+1. Define 3 reasons with \`Schema.TaggedError\`: \`RateLimited\` (\`retryAfter: number\`), \`Unauthorized\` (\`scope: string\`), \`Maintenance\` (\`until: string\`). Define \`ApiError\` with a \`reason\` field that is a \`Schema.Union\` of the 3 reasons.
+2. \`call(n)\` returns \`Effect<string, ApiError>\`. \`n = 1\` succeeds with \`"ok 200"\`. \`n = 2\` fails with \`RateLimited\` (retryAfter 30). \`n = 3\` fails with \`Unauthorized\` (scope \`"orders:read"\`). Any other \`n\` fails with \`Maintenance\` (until \`"06:00"\`).
+3. \`message(n)\` uses \`Effect.catchReasons\`. It changes \`RateLimited\` into \`"wait " + retryAfter + "s"\` and \`Unauthorized\` into \`"need scope " + scope\`. The third argument catches any other reason and gives \`"try again after " + until\`. The error type of \`message\` must be \`never\`.
 
-Print \`"call " + n + ": " + message\` for n in 1 to 4. Exact output:
+Print \`"call " + n + ": " + message\` for n from 1 to 4. Exact output:
 
 \`\`\`
 call 1: ok 200
@@ -1123,44 +1165,44 @@ call 2: wait 30s
 call 3: need scope orders:read
 call 4: try again after 06:00`,
       hints: [
-        "The reason field is declared like any other schema field: reason: Schema.Union([RateLimited, Unauthorized, Maintenance]). Construct with new ApiError({ reason: new RateLimited({ retryAfter: 30 }) }).",
-        "catchReasons takes the parent tag, an object keyed by reason tags, and an optional third function for the remaining reasons. Each handler receives the reason, not the ApiError.",
-        "With the catch-all present, the only reason left is Maintenance, so r.until is available in it and E becomes never."
+        "Declare the reason field like any other schema field: reason: Schema.Union([RateLimited, Unauthorized, Maintenance]). Construct with new ApiError({ reason: new RateLimited({ retryAfter: 30 }) }).",
+        "catchReasons takes the parent tag, an object with the reason tags as keys, and an optional third function for the other reasons. Each handler receives the reason, not the ApiError.",
+        "With the third function present, the only reason left is Maintenance. Thus r.until is available in it, and E becomes never."
       ]
     }
   ],
   recall: [
     {
-      q: "What is the difference between `Effect.fail` and `Effect.die`, and which catch functions see each?",
-      a: "`Effect.fail(e)` is an expected failure: `e` goes into the `E` type, and `catch`, `catchTag`, `catchTags`, `catchIf`, `match`, `result`, `option` all see it. `Effect.die(x)` (and any exception thrown inside `Effect.sync`) is a defect: it is not in the type, and only `catchDefect` and `catchCause` see it."
+      q: "What is the difference between `Effect.fail` and `Effect.die`, and which catch functions see each one?",
+      a: "`Effect.fail(e)` is an expected failure. `e` goes into the `E` type, and `catch`, `catchTag`, `catchTags`, `catchIf`, `match`, `result`, and `option` all see it. `Effect.die(x)` is a defect. An exception thrown inside `Effect.sync` is also a defect. A defect is not in the type. Only `catchDefect` and `catchCause` see it."
     },
     {
-      q: "What would the type be of `Effect.fail(new NotFound({ id: 1 })).pipe(Effect.catchTag(\"NotFound\", () => Effect.succeed(0)))`?",
-      a: "`Effect<number, never, never>`. The original effect is `Effect<never, NotFound>`; the handler removes `NotFound` from `E` and adds `number` to `A`. Nothing is left in the error channel."
+      q: "What is the type of `Effect.fail(new NotFound({ id: 1 })).pipe(Effect.catchTag(\"NotFound\", () => Effect.succeed(0)))`?",
+      a: "`Effect<number, never, never>`. The original effect is `Effect<never, NotFound>`. The handler removes `NotFound` from `E` and adds `number` to `A`. Nothing is left in the error type."
     },
     {
-      q: "You have `Effect<User, NotFound | Forbidden | Timeout>` and want a different fallback for `NotFound` and `Forbidden`, leaving `Timeout` unhandled. Which function would you reach for?",
-      a: "`Effect.catchTags({ NotFound: ..., Forbidden: ... })`. One handler per tag, and `Timeout` stays in `E`. If both should get the same handler, `Effect.catchTag([\"NotFound\", \"Forbidden\"], ...)` is shorter."
+      q: "You have `Effect<User, NotFound | Forbidden | Timeout>`. You want a different fallback for `NotFound` and for `Forbidden`, and you want to keep `Timeout` in `E`. Which function do you use?",
+      a: "`Effect.catchTags({ NotFound: ..., Forbidden: ... })`. One handler for each tag, and `Timeout` stays in `E`. If both tags must get the same handler, `Effect.catchTag([\"NotFound\", \"Forbidden\"], ...)` is shorter."
     },
     {
-      q: "Inside `Effect.gen`, why is `throw new NotFound({ id })` wrong, and what should you write instead?",
-      a: "`throw` makes a defect: the error leaves the type and `catchTag` cannot see it. Write `yield* new NotFound({ id })` (usually `return yield* ...`). Tagged errors are yieldable, so this fails the effect with `NotFound` in `E`."
+      q: "Inside `Effect.gen`, why is `throw new NotFound({ id })` wrong, and what must you write in its place?",
+      a: "`throw` makes a defect. The error leaves the type, and `catchTag` cannot see it. Write `yield* new NotFound({ id })` (usually `return yield* ...`). You can yield tagged errors, so this fails the effect with `NotFound` in `E`."
     },
     {
       q: "What does `cause.reasons` contain on a failed `Exit`, and what are the three tags?",
-      a: "A flat array of reasons. Each has `_tag` equal to `Fail` (with `.error`, the typed value), `Die` (with `.defect`, an `unknown`), or `Interrupt` (with `.fiberId`). There is no tree of sequential or parallel causes in v4, only this array."
+      a: "A flat array of reasons. Each reason has a `_tag`: `Fail` (with `.error`, the typed value), `Die` (with `.defect`, an `unknown`), or `Interrupt` (with `.fiberId`). In v4 there is no tree of sequential or parallel causes, only this array."
     },
     {
-      q: "When would you use `Effect.unwrapReason` instead of `Effect.catchReasons`?",
-      a: "`catchReasons` handles some reasons while keeping the parent error in `E` for the others. `unwrapReason` replaces the parent with its reasons entirely, so `E` becomes the union of reason types and you continue with `catchTags` or any other tool. Use it when the \"which step failed\" information is no longer needed."
+      q: "When do you use `Effect.unwrapReason` in place of `Effect.catchReasons`?",
+      a: "`catchReasons` catches some reasons and keeps the parent error in `E` for the other reasons. `unwrapReason` replaces the parent with its reasons. Then `E` becomes the union of the reason types, and you continue with `catchTags` or any other function. Use it when the information \"which step failed\" is no longer necessary."
     },
     {
-      q: "`Effect.result`, `Effect.option`, `Effect.exit`: which one shows you a defect?",
-      a: "Only `Effect.exit`. `result` and `option` capture typed failures only, and a defect still fails the surrounding effect. `Exit` carries the full `Cause`, including `Die` and `Interrupt` reasons."
+      q: "`Effect.result`, `Effect.option`, `Effect.exit`: which one shows a defect?",
+      a: "Only `Effect.exit`. `result` and `option` capture typed failures only. A defect still fails the outer effect. `Exit` holds the full `Cause`, which includes `Die` and `Interrupt` reasons."
     },
     {
-      q: "In `Effect.catchIf`, what changes in the resulting `E` when you pass a type guard versus a plain boolean predicate?",
-      a: "With a type guard `(e): e is HttpError => ...`, `HttpError` is removed from `E`, so only use a guard when it matches every value of that class. With a plain predicate, `E` is unchanged, which is correct when only some values (say status 500 and above) are recovered."
+      q: "In `Effect.catchIf`, how does the result `E` change when you pass a type guard and not a plain boolean predicate?",
+      a: "With a type guard `(e): e is HttpError => ...`, Effect removes `HttpError` from `E`. Use a guard only when it matches every value of that class. With a plain predicate, `E` does not change. This is correct when the handler recovers only some values (for example, status 500 and above)."
     }
   ]
 }

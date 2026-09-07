@@ -6,46 +6,46 @@ const section: Section = {
   order: 17,
   summary: "Option, Result, Duration, DateTime, Data classes, Chunk, HashMap and HashSet: explicit values instead of null, throw, raw milliseconds and mutable Dates.",
   intro: `
-**The problem.** Plain TypeScript has four habits that hide information from the type checker. They look harmless one at a time:
+**The problem.** Plain TypeScript hides 4 kinds of information from the type checker. Each one looks small:
 
 \`\`\`ts
-function findUser(id: number): User | null      // every caller must remember the null check
-function parseAge(raw: string): number          // throws on bad input, the signature says nothing
-setTimeout(retry, 5000)                         // is 5000 milliseconds? seconds? nobody knows
-const due = new Date(); due.setDate(due.getDate() + 30)   // mutated in place, timezone of the machine
+function findUser(id: number): User | null      // each caller must remember the null check
+function parseAge(raw: string): number          // throws on bad input; the signature does not say so
+setTimeout(retry, 5000)                         // 5000 milliseconds? 5000 seconds? the code does not say
+const due = new Date(); due.setDate(due.getDate() + 30)   // changed in place, in the local time of the machine
 \`\`\`
 
-Forget the null check and you get \`Cannot read properties of null\` in production. Forget the \`try\` and the throw escapes three layers up. Pass \`5\` where \`5000\` was expected and the retry fires instantly. Reuse a \`Date\` after something mutated it and the invoice is a month late. None of these mistakes is a compile error.
+If you forget the null check, you get \`Cannot read properties of null\` in production. If you forget the \`try\`, the exception stops the program 3 functions up. If you pass \`5\` where \`5000\` was expected, the retry starts at once. If some code changes a \`Date\` that other code holds, the invoice date is wrong. The compiler does not report any of these 4 mistakes.
 
 ### The shift
 
-Today you think of "no value", "failed", "how long" and "when" as things you handle with **conventions**: a \`null\` check here, a \`try/catch\` there, a comment saying "in ms". Effect asks you to represent each of them as an **explicit value with a type**, and to work on those values with **total functions**, functions that have an answer for every input and never throw.
+Today you represent "no value", "failed", "how long" and "when" with conventions: a \`null\` check here, a \`try/catch\` there, a comment that says "in ms". Effect asks you to represent each of them as a value with a type. Then you work on that value with total functions. A total function has a result for every input and never throws.
 
-- \`Option<A>\` says "maybe an \`A\`" and every operation on it handles both cases for you.
-- \`Result<A, E>\` says "an \`A\` or an \`E\`" and carries the failure as data instead of a thrown exception.
-- \`Duration\` says "this much time" with a unit, so \`"5 seconds"\` and \`5000\` cannot be confused.
-- \`DateTime\` is an immutable instant; adding a day returns a new value and the time zone is explicit.
-- \`Data\` classes, \`Chunk\`, \`HashMap\` and \`HashSet\` are immutable collections and records that compare by value.
+- \`Option<A>\` means "an \`A\` or nothing". Each operation on it processes both cases.
+- \`Result<A, E>\` means "an \`A\` or an \`E\`". The failure is data, not a thrown exception.
+- \`Duration\` means "this much time" with a unit. \`"5 seconds"\` and \`5000\` cannot be confused.
+- \`DateTime\` is an immutable instant. When you add a day, you get a new value. The time zone is explicit.
+- \`Data\` classes, \`Chunk\`, \`HashMap\` and \`HashSet\` are immutable records and collections. They compare by value.
 
-The payoff: the compiler enforces the convention. A missing value cannot be forgotten because it is not an \`A\`, it is an \`Option<A>\`. A failure cannot escape because it is a \`Result\`. And every one of these types plugs straight into \`Effect\`: an \`Option\` becomes an \`Effect\` that fails with \`NoSuchElementError\`, a \`Result\` becomes an \`Effect\` that fails with its \`E\`, a \`Duration\` is what \`sleep\` and \`timeout\` accept.
+The compiler enforces the convention. You cannot forget an absent value, because the type is \`Option<A>\` and not \`A\`. A failure cannot get out, because it is a \`Result\`. Each of these types also connects to \`Effect\`. An \`Option\` becomes an effect that fails with \`NoSuchElementError\`. A \`Result\` becomes an effect that fails with its \`E\`. A \`Duration\` is the input of \`sleep\` and \`timeout\`.
 
-| Plain TypeScript | Effect | What you gain |
+| Plain TypeScript | Effect | What you get |
 |---|---|---|
-| \`A \\| null \\| undefined\` | \`Option<A>\` | \`map\`, \`flatMap\`, \`getOrElse\` never forget the empty case |
-| \`throw\` / \`try\`-\`catch\` | \`Result<A, E>\` | The failure type is in the signature; it is a value you can inspect |
-| \`number\` of milliseconds | \`Duration\` | Units are explicit: \`Duration.seconds(5)\`, \`"5 seconds"\` |
+| \`A \\| null \\| undefined\` | \`Option<A>\` | \`map\`, \`flatMap\` and \`getOrElse\` process the absent case for you |
+| \`throw\` / \`try\`-\`catch\` | \`Result<A, E>\` | The failure type is in the signature. The failure is a value that you can inspect. |
+| \`number\` of milliseconds | \`Duration\` | The unit is explicit: \`Duration.seconds(5)\`, \`"5 seconds"\` |
 | \`Date\` (mutable, local time) | \`DateTime\` | Immutable, UTC by default, explicit zones, calendar math |
-| \`Array\` (mutable) | \`Chunk\` | Immutable, cheap append, value equality; what streams emit |
-| \`Map\` / \`Set\` (keys by reference) | \`HashMap\` / \`HashSet\` | Keys compared by value, updates return a new collection |
+| \`Array\` (mutable) | \`Chunk\` | Immutable, cheap append, value equality. Streams emit Chunks. |
+| \`Map\` / \`Set\` (keys by reference) | \`HashMap\` / \`HashSet\` | Keys compare by value. An update returns a new collection. |
 
-In this section you will meet each type through a small program, then combine them. The next two sections (Trait, Behaviour) explain the equality and ordering machinery these types share.
+In this section, each type gets one small program. Then you combine them. The 2 next sections, Trait and Behaviour, explain the equality and order rules that these types share.
 `,
   lessons: [
     {
       id: "data-types-l1",
-      title: "Option: a value that may be missing",
+      title: "Option: a value that can be absent",
       explain: `
-Here is the plain TypeScript version of "find a user, then get the domain of their email, or a fallback":
+Here is the plain TypeScript version of "find a user, get the domain of the email, or use a fallback":
 
 \`\`\`ts
 const user = users.find((u) => u.id === id)
@@ -54,16 +54,16 @@ if (!user.email) return "no email"
 return user.email.split("@")[1]
 \`\`\`
 
-Three lines of the five are null checks, and the fallback string is repeated. \`Option\` replaces this with a chain of total functions. \`Option.fromNullishOr\` turns \`A | null | undefined\` into \`Option<A>\`. Then:
+3 of the 5 lines are null checks, and the fallback text appears twice. \`Option\` replaces this with a chain of total functions. \`Option.fromNullishOr\` converts \`A | null | undefined\` to \`Option<A>\`. Then you use these functions:
 
 | Function | Use when |
 |---|---|
 | \`Option.map(f)\` | \`f\` returns a plain value |
-| \`Option.flatMap(f)\` | \`f\` itself returns an \`Option\` (a second thing that may be missing) |
-| \`Option.getOrElse(() => d)\` | You want to leave Option-land with a default |
-| \`Option.match({ onNone, onSome })\` | Both branches need different code |
+| \`Option.flatMap(f)\` | \`f\` returns an \`Option\` (a second value that can be absent) |
+| \`Option.getOrElse(() => d)\` | You want a plain value, with a default for \`None\` |
+| \`Option.match({ onNone, onSome })\` | The 2 cases need different code |
 
-If the Option is \`None\`, \`map\` and \`flatMap\` do nothing and pass the \`None\` along. The empty case is handled once, by the type, not once per line.
+When the Option is \`None\`, \`map\` and \`flatMap\` do nothing and pass the \`None\` on. The type processes the absent case once. You do not process it on each line.
 `,
       code: `import { Option } from "effect"
 
@@ -107,23 +107,23 @@ console.log(describe)
 no email
 no email
 user Lin`,
-      after: `Notice that the fallback \`"no email"\` appears once, at the end. Try changing \`Option.flatMap\` on the email line to \`Option.map\`: you get an \`Option<Option<string>>\` and the next \`map\` no longer type-checks, because \`split\` is not a function on an Option. \`flatMap\` is for functions that return an Option.`
+      after: `The fallback \`"no email"\` appears once, at the end. Change \`Option.flatMap\` on the email line to \`Option.map\`. The result is an \`Option<Option<string>>\`, and the next \`map\` does not compile, because \`split\` is not a function of an Option. Use \`flatMap\` for functions that return an Option.`
     },
     {
       id: "data-types-l2",
       title: "Option inside an Effect",
       explain: `
-Sooner or later an optional value shows up inside \`Effect.gen\`. In this version of Effect you do not \`yield*\` an Option directly (that is neither an accepted type nor a valid runtime step). You convert it with one of two bridges:
+An optional value soon appears inside \`Effect.gen\`. In this version of Effect, you cannot \`yield*\` an Option directly. The compiler rejects it, and the runtime rejects it. You convert the Option with one of 3 functions:
 
-| Bridge | Direction | Result |
+| Function | Direction | Result |
 |---|---|---|
-| \`Effect.fromOption(opt)\` | Option to Effect | \`Some(a)\` succeeds with \`a\`; \`None\` fails with \`NoSuchElementError\` |
-| \`Effect.fromOption(opt, () => err)\` | Option to Effect | Same, but \`None\` fails with your own error |
-| \`Effect.option(effect)\` | Effect to Option | Any failure becomes \`None\`, success becomes \`Some\` |
+| \`Effect.fromOption(opt)\` | Option to Effect | \`Some(a)\` succeeds with \`a\`. \`None\` fails with \`NoSuchElementError\`. |
+| \`Effect.fromOption(opt, () => err)\` | Option to Effect | The same, but \`None\` fails with your own error |
+| \`Effect.option(effect)\` | Effect to Option | A failure becomes \`None\`. A success becomes \`Some\`. |
 
-\`NoSuchElementError\` is a tagged error from the \`Cause\` module, so it sits in the error channel like any other typed failure: \`Effect<number, NoSuchElementError>\`. The compiler will make you handle it, which is exactly the point. A missing price is not an exception, it is a case.
+\`NoSuchElementError\` is a tagged error from the \`Cause\` module. It is in the error channel like each other typed failure: \`Effect<number, NoSuchElementError>\`. The compiler makes you process it. An absent price is not an exception. It is a case.
 
-\`Effect.fromNullishOr(value)\` is the shortcut for \`Effect.fromOption(Option.fromNullishOr(value))\`.
+\`Effect.fromNullishOr(value)\` is a short form of \`Effect.fromOption(Option.fromNullishOr(value))\`.
 `,
       code: `import { Effect, Option } from "effect"
 
@@ -159,16 +159,16 @@ Effect.runSync(program)
       expectedOutput: `total: 215
 with kiwi: none()
 kiwi is not for sale`,
-      after: `Hover \`total\` in an editor: its type is \`Effect<number, NoSuchElementError>\`. The missing case travelled from \`Map.get\` all the way into the Effect's error channel without a single \`if\`. Try replacing the \`Effect.option\` line with a plain \`yield* total(["apple", "kiwi"])\`: the program now fails with \`NoSuchElementError\`, which \`runSync\` throws.`
+      after: `Look at the type of \`total\` in an editor: \`Effect<number, NoSuchElementError>\`. The absent case went from \`Map.get\` to the error channel of the effect without an \`if\`. Replace the \`Effect.option\` line with \`yield* total(["apple", "kiwi"])\`. The program now fails with \`NoSuchElementError\`, and \`runSync\` throws it.`
     },
     {
       id: "data-types-l3",
       title: "Result: success or failure as a value",
       explain: `
-An \`Option\` only says "missing". When you also need to say *why*, use \`Result<A, E>\` (Effect v3 called it \`Either\`). Compare a throwing validator with a Result-returning one:
+An \`Option\` only says "absent". When you must also say why, use \`Result<A, E>\`. Effect v3 named this type \`Either\`. Compare a validator that throws with a validator that returns a Result:
 
 \`\`\`ts
-// throws: the signature is a lie, the caller must guess
+// throws: the signature does not show it, the caller must guess
 function parseAge(raw: string): number {
   const n = Number(raw)
   if (Number.isNaN(n)) throw new Error("not a number")
@@ -176,9 +176,9 @@ function parseAge(raw: string): number {
 }
 \`\`\`
 
-The Result version returns \`Result.succeed(n)\` or \`Result.fail("not a number")\`, and its type is \`Result<number, string>\`. A Result is plain data: nothing runs when you create it, and you can \`map\` the success, \`mapError\` the failure, or \`match\` both without any \`try\`.
+The Result version returns \`Result.succeed(n)\` or \`Result.fail("not a number")\`. Its type is \`Result<number, string>\`. A Result is data. Nothing runs when you make it. You can \`map\` the success, \`mapError\` the failure, or \`match\` both. No \`try\` is necessary.
 
-Two bridges connect Result to Effect, the same way as for Option: \`Effect.fromResult(result)\` moves the failure into the error channel, and \`Effect.result(effect)\` captures an Effect's outcome as a \`Result\` so the effect itself can no longer fail.
+2 functions connect Result and Effect, as for Option. \`Effect.fromResult(result)\` moves the failure into the error channel. \`Effect.result(effect)\` captures the outcome of an effect as a \`Result\`. After that, the effect cannot fail.
 `,
       code: `import { Effect, Result } from "effect"
 
@@ -220,23 +220,23 @@ rejected (NOT A NUMBER: ABC)
 rejected (OUT OF RANGE: 200)
 age from effect: 30
 captured: failure("not a number: x")`,
-      after: `\`Result.map\` skipped the two failures and \`Result.mapError\` skipped the success. Each function touches one channel only. When would you pick \`Result\` over throwing inside \`Effect.try\`? When the function is pure and you want to call it from non-Effect code too; a Result works anywhere.`
+      after: `\`Result.map\` did not touch the 2 failures. \`Result.mapError\` did not touch the success. Each function changes one channel only. Use \`Result\` when the function is pure and code without Effect must also call it. A Result works everywhere.`
     },
     {
       id: "data-types-l4",
       title: "Duration: time with a unit",
       explain: `
-A bare number is the most common way to get a timeout wrong. \`Duration\` makes the unit part of the value. There are three ways to write the same duration, and they compare equal:
+A bare number is the most common cause of a wrong timeout. \`Duration\` makes the unit part of the value. There are 3 ways to write the same duration. They compare equal:
 
 | Form | Example | Use when |
 |---|---|---|
-| Constructor | \`Duration.seconds(5)\`, \`Duration.millis(5000)\` | Building durations in code |
-| String | \`"5 seconds"\`, \`"500 millis"\`, \`"2 minutes"\` | Passing to an Effect API that takes \`Duration.Input\` |
-| Number | \`5000\` | Only when you already have milliseconds; it is treated as millis |
+| Constructor | \`Duration.seconds(5)\`, \`Duration.millis(5000)\` | You build a duration in code |
+| Text | \`"5 seconds"\`, \`"500 millis"\`, \`"2 minutes"\` | You give a duration to an Effect API that accepts \`Duration.Input\` |
+| Number | \`5000\` | You already have milliseconds. The number is read as milliseconds. |
 
-Every Effect function that waits (\`Effect.sleep\`, \`Effect.timeout\`, retry schedules) accepts a \`Duration.Input\`, which is any of the three forms. \`Duration.fromInputUnsafe\` converts a string or number into a real \`Duration\` when you need to do math on it.
+Each Effect function that waits accepts a \`Duration.Input\`: \`Effect.sleep\`, \`Effect.timeout\` and the retry schedules. A \`Duration.Input\` is one of the 3 forms. \`Duration.fromInputUnsafe\` converts text or a number to a \`Duration\` when you need to do math on it.
 
-Durations are immutable and comparable: \`Duration.equals\`, \`Duration.isLessThan\`, \`Duration.sum\`, \`Duration.format\` for a human-readable string. \`Effect.timeout\` fails with a typed \`TimeoutError\` when the time runs out.
+Durations are immutable, and you can compare them: \`Duration.equals\`, \`Duration.isLessThan\`, \`Duration.sum\`. \`Duration.format\` makes a text for humans. \`Effect.timeout\` fails with a typed \`TimeoutError\` when the time is over.
 `,
       code: `import { Duration, Effect } from "effect"
 
@@ -270,27 +270,27 @@ main()
 true
 job done
 TimeoutError`,
-      after: `Try changing \`"1 second"\` to \`1\`. A bare \`1\` means one millisecond, so the first call times out too. That is the bug \`Duration\` is designed to make visible: write \`"1 second"\` or \`Duration.seconds(1)\` and the unit is in the code.`
+      after: `Change \`"1 second"\` to \`1\`. A bare \`1\` means 1 millisecond, so the first call also times out. This is the mistake that \`Duration\` makes visible. Write \`"1 second"\` or \`Duration.seconds(1)\`, and the unit is in the code.`
     },
     {
       id: "data-types-l5",
       title: "DateTime: immutable instants with explicit zones",
       explain: `
-JavaScript's \`Date\` is mutable, prints in the machine's local time, and turns bad input into \`Invalid Date\` instead of an error. \`DateTime\` fixes all three.
+A JavaScript \`Date\` has 3 problems. Other code can change it. It prints in the local time of the machine. Bad input becomes \`Invalid Date\` instead of an error. \`DateTime\` corrects all 3.
 
 | Need | Function |
 |---|---|
-| Parse a string, safely | \`DateTime.make(input)\` returns \`Option<DateTime>\` |
-| Parse a string you trust | \`DateTime.makeUnsafe(input)\` throws on bad input |
-| The current time | \`yield* DateTime.now\` inside an Effect (uses the Clock service, so tests can control it); \`DateTime.nowUnsafe()\` outside |
+| Parse text, safely | \`DateTime.make(input)\` returns \`Option<DateTime>\` |
+| Parse text that you trust | \`DateTime.makeUnsafe(input)\` throws on bad input |
+| The current time | \`yield* DateTime.now\` inside an effect. It uses the Clock service, so tests can control the time. Outside an effect: \`DateTime.nowUnsafe()\` |
 | Calendar math | \`DateTime.add(dt, { days: 20 })\`, \`DateTime.startOf(dt, "month")\` |
 | Duration math | \`DateTime.addDuration(dt, "90 minutes")\` |
-| Gap between two instants | \`DateTime.distance(a, b)\` returns a \`Duration\` |
+| Time between 2 instants | \`DateTime.distance(a, b)\` returns a \`Duration\` |
 | Print | \`DateTime.formatIso\`, \`formatIsoDate\`, \`formatIsoZoned\` |
 
-A \`DateTime.Utc\` is a point in time. \`DateTime.setZoneNamedUnsafe(dt, "Asia/Tokyo")\` gives a \`DateTime.Zoned\`: the **same instant**, viewed through a zone. Calendar parts (\`toParts\`) follow the zone; \`toPartsUtc\` ignores it.
+A \`DateTime.Utc\` is a point in time. \`DateTime.setZoneNamedUnsafe(dt, "Asia/Tokyo")\` gives a \`DateTime.Zoned\`. It is the same instant, seen through a zone. The calendar parts from \`toParts\` follow the zone. \`toPartsUtc\` ignores the zone.
 
-This lesson builds from a fixed ISO string so the output is stable. Real code uses \`DateTime.now\`.
+Note: this lesson builds the values from a fixed ISO text, so the output is stable. Real code uses \`DateTime.now\`.
 `,
       code: `import { DateTime, Duration, Option } from "effect"
 
@@ -326,24 +326,24 @@ none()
 2d 18h 30m
 2024-06-15T23:30:00.000+09:00[Asia/Tokyo]
 23 14`,
-      after: `\`launch\` printed the same value before and after all the math, because every function returned a new \`DateTime\`. Try \`DateTime.add(launch, { months: 1 })\` and then \`{ days: 30 }\`: calendar months and fixed durations are different things, and \`DateTime\` lets you say which one you mean.`
+      after: `\`launch\` printed the same value before and after the math. Each function returned a new \`DateTime\`. Compare \`DateTime.add(launch, { months: 1 })\` with \`DateTime.add(launch, { days: 30 })\`. A calendar month and a fixed duration are different things. \`DateTime\` lets you say which one you mean.`
     },
     {
       id: "data-types-l6",
       title: "Data: small immutable records",
       explain: `
-The \`Data\` module builds immutable domain values with less ceremony than a hand-written class:
+The \`Data\` module builds immutable domain values with less code than a class that you write by hand:
 
 | Helper | Gives you |
 |---|---|
-| \`Data.Class<{ fields }>\` | Readonly fields, one-object constructor, \`.pipe\` |
-| \`Data.TaggedClass("Tag")<{ fields }>\` | The same plus a \`_tag\` field you do not have to write |
-| \`Data.taggedEnum<Union>()\` | Constructors and a \`$match\` for a whole union of tagged records |
-| \`Data.Error\` / \`Data.TaggedError\` | Errors that can be yielded inside \`Effect.gen\` (see Error Management) |
+| \`Data.Class<{ fields }>\` | Readonly fields, a constructor with 1 object argument, \`.pipe\` |
+| \`Data.TaggedClass("Tag")<{ fields }>\` | The same, plus a \`_tag\` field that you do not write |
+| \`Data.taggedEnum<Union>()\` | Constructors and a \`$match\` function for a union of tagged records |
+| \`Data.Error\` / \`Data.TaggedError\` | Errors that you can \`yield*\` inside \`Effect.gen\` (see Error Management) |
 
-If you used Effect v3 you may remember \`Data.struct\` and \`Data.array\`, which existed to opt objects into value equality. They are gone in v4, because \`Equal.equals\` now compares plain objects, arrays and class instances by value out of the box. What \`Data\` still adds is shape: readonly fields, the \`_tag\`, and the constructor discipline.
+Effect v3 had \`Data.struct\` and \`Data.array\`. They gave objects value equality. They do not exist in v4, because \`Equal.equals\` now compares plain objects, arrays and class instances by value without help. \`Data\` still gives you a shape: readonly fields, the \`_tag\`, and one constructor form.
 
-Value equality is the preview of the next section. \`===\` compares references and says two identical points are different; \`Equal.equals\` compares contents.
+Value equality is a preview of the next section. \`===\` compares references, so 2 points with the same fields are different. \`Equal.equals\` compares the contents.
 `,
       code: `import { Data, Equal } from "effect"
 
@@ -379,23 +379,23 @@ console.log(Equal.equals(Circle({ radius: 2 }), Circle({ radius: 2 })))
 Money 500 true
 13 12
 true`,
-      after: `Try removing the \`Rect\` case from \`$match\`: TypeScript refuses, because the matcher must cover every variant of \`Shape\`. Add a third variant to the type and every \`$match\` in the codebase flags the missing case. That is what a tagged union buys you over a loose \`{ kind: string }\`.`
+      after: `Remove the \`Rect\` case from \`$match\`. TypeScript rejects the program, because the matcher must cover each variant of \`Shape\`. If you add a third variant to the type, each \`$match\` in the program reports the absent case. A loose \`{ kind: string }\` does not give you this check.`
     },
     {
       id: "data-types-l7",
       title: "Chunk, HashMap and HashSet: immutable collections with value keys",
       explain: `
-JavaScript's \`Array\`, \`Map\` and \`Set\` are mutable, and \`Map\`/\`Set\` compare keys by reference: \`new Map().get({ id: 1 })\` never finds anything, because the lookup object is a different reference from the stored one. Effect's collections fix both.
+The JavaScript \`Array\`, \`Map\` and \`Set\` can be changed in place. \`Map\` and \`Set\` compare keys by reference. \`new Map().get({ id: 1 })\` never finds an entry, because the lookup object is a different reference from the stored key. The Effect collections correct both problems.
 
 | Collection | Like | Different because |
 |---|---|---|
-| \`Chunk<A>\` | \`ReadonlyArray<A>\` | Immutable, cheap \`append\`/\`prepend\`/\`appendAll\`, compares by value. Streams emit Chunks. |
-| \`HashMap<K, V>\` | \`Map<K, V>\` | Keys compared by value; \`set\`/\`remove\` return a new map |
-| \`HashSet<A>\` | \`Set<A>\` | Members compared by value; one entry per equal value |
+| \`Chunk<A>\` | \`ReadonlyArray<A>\` | Immutable. \`append\`, \`prepend\` and \`appendAll\` are cheap. Compares by value. Streams emit Chunks. |
+| \`HashMap<K, V>\` | \`Map<K, V>\` | Keys compare by value. \`set\` and \`remove\` return a new map. |
+| \`HashSet<A>\` | \`Set<A>\` | Members compare by value. One entry per equal value. |
 
-When does \`Chunk\` matter? Mostly at the edges of streams and batches, where a producer keeps appending and you never want to copy the whole array. For everyday code, a plain \`ReadonlyArray\` plus the \`Array\` module functions is fine, and \`Chunk.toArray\` / \`Chunk.fromIterable\` convert in both directions.
+When does \`Chunk\` matter? Mostly at the edges of streams and batches, where a producer appends many times and you do not want a copy of the full array. For other code, a \`ReadonlyArray\` with the functions of the \`Array\` module is enough. \`Chunk.toArray\` and \`Chunk.fromIterable\` convert in both directions.
 
-\`HashMap.get\` returns an \`Option\`, so a missing key is a value, not \`undefined\`.
+\`HashMap.get\` returns an \`Option\`. A key that is not in the map gives \`None\`, not \`undefined\`.
 `,
       code: `import { Chunk, Equal, HashMap, HashSet, Option } from "effect"
 
@@ -429,14 +429,56 @@ some(8)
 none()
 8 50
 2 3`,
-      after: `The lookup key \`{ warehouse: "B", sku: "bolt" }\` was a brand-new object each time and still found the entry. A JS \`Map\` would have returned \`undefined\`. This works because \`HashMap\` uses the \`Equal\` and \`Hash\` traits, which the next section explains.`
+      after: `The lookup key \`{ warehouse: "B", sku: "bolt" }\` was a new object each time, and it found the entry. A JS \`Map\` returns \`undefined\` for a new object. This works because \`HashMap\` uses the \`Equal\` and \`Hash\` traits. The next section explains them.`
+    }
+  ],
+  dosAndDonts: [
+    {
+      do: "Use `Option.fromNullishOr(value)` to convert `A | null | undefined` to an `Option<A>`.",
+      dont: "Do not call `Option.fromNullable`. It does not exist in v4.",
+      why: "The program does not compile, and the error message names a property that does not exist."
+    },
+    {
+      do: "Use `Option.flatMap` when the function returns an `Option`.",
+      dont: "Do not use `Option.map` with a function that returns an `Option`.",
+      why: "You get an `Option<Option<A>>`, and `getOrElse` returns an Option instead of the value."
+    },
+    {
+      do: "Give `Option.getOrElse` a function: `Option.getOrElse(() => 0)`.",
+      dont: "Do not pass the default value directly: `Option.getOrElse(0)`.",
+      why: "The default must be a function, and the program stops with \"onNone is not a function\" on the None path."
+    },
+    {
+      do: "Convert an `Option` with `Effect.fromOption` before you use it in `Effect.gen`.",
+      dont: "Do not `yield*` an `Option` or a `Result` directly inside `Effect.gen`.",
+      why: "The compiler rejects it, and the runtime stops with \"Not a valid effect\"."
+    },
+    {
+      do: "Write durations with a unit: `\"2 seconds\"` or `Duration.seconds(2)`.",
+      dont: "Do not pass a bare number when you mean seconds: `Effect.timeout(2)`.",
+      why: "A bare number means milliseconds, so the timeout is 2 milliseconds and the effect always times out."
+    },
+    {
+      do: "Keep the value that `DateTime.add` returns: `const next = DateTime.add(dt, { days: 1 })`.",
+      dont: "Do not call `DateTime.add(dt, ...)` and then use `dt`.",
+      why: "A `DateTime` is immutable, so `dt` does not change and the program prints the old date."
+    },
+    {
+      do: "Use `DateTime.now` inside an effect to read the current time.",
+      dont: "Do not use `DateTime.nowUnsafe()` or `new Date()` inside effect code.",
+      why: "Tests cannot control the time with `TestClock`, and the output changes on each run."
+    },
+    {
+      do: "Use `HashMap` or `HashSet` when the keys are objects.",
+      dont: "Do not put object keys in a JS `Map` or `Set`.",
+      why: "A JS `Map` compares object keys by reference, so a new object with the same fields never finds the entry."
     }
   ],
   challenges: [
     {
       id: "data-types-c1",
       title: "A v3 name",
-      task: `This program should print \`port 8080\` but it does not compile: the Option constructor it uses does not exist in this version of Effect. Replace it with the right one.`,
+      task: `This program must print \`port 8080\`. It does not compile, because the Option constructor does not exist in this version of Effect. Replace it with the correct one.`,
       code: `import { Option } from "effect"
 
 const config: { port?: number } = {}
@@ -459,16 +501,16 @@ console.log("port", port)
 `,
       expectedOutput: `port 8080`,
       hints: [
-        "The v3 name was fromNullable. The v4 family is named after what it treats as absent: null-ish, null, or undefined.",
-        "Lesson 1 used the function that treats both null and undefined as None.",
+        "The v3 name was fromNullable. The v4 names say what they treat as absent: null-ish, null, or undefined.",
+        "Lesson 1 uses the function that treats null and undefined as None.",
         "Use Option.fromNullishOr(config.port)."
       ],
-      explanation: `v4 renamed the nullable constructors to say exactly what they consider absent: \`Option.fromNullishOr\` (null or undefined), \`Option.fromNullOr\` (only null) and \`Option.fromUndefinedOr\` (only undefined). The old \`fromNullable\` is gone, so the property access is a type error. Reading the error message ("Property 'fromNullable' does not exist") is faster than guessing: grep the module for the family and pick the one that matches your input type.`
+      explanation: `v4 renamed the nullable constructors. Each name says what it treats as absent: \`Option.fromNullishOr\` (null or undefined), \`Option.fromNullOr\` (only null) and \`Option.fromUndefinedOr\` (only undefined). The old \`fromNullable\` does not exist, so the property access is a type error. Read the error message: "Property 'fromNullable' does not exist". Then look at the module for the family of functions and select the one that matches your input type.`
     },
     {
       id: "data-types-c2",
       title: "The default that is not lazy",
-      task: `The program prints the right thing at runtime but does not type-check. Make it compile without changing the output \`The Countess\`.`,
+      task: `The program prints the correct output at runtime, but it does not compile. Make it compile. The output must stay \`The Countess\`.`,
       code: `import { Option } from "effect"
 
 const nicknames = new Map([["ada", "The Countess"]])
@@ -493,16 +535,16 @@ console.log(greet("ada"))
 `,
       expectedOutput: `The Countess`,
       hints: [
-        "Read the type error: getOrElse wants a LazyArg. What is a LazyArg?",
-        "The default is only needed when the Option is None, so Effect asks for a function that produces it.",
+        "Read the type error. getOrElse wants a LazyArg. A LazyArg is a function with no arguments.",
+        "The default is only necessary when the Option is None. Effect asks for a function that makes it.",
         "Write Option.getOrElse(() => \"stranger\")."
       ],
-      explanation: `\`getOrElse\` takes a function \`() => B\`, not a \`B\`. Laziness is the point: the default is only computed when the Option is \`None\`, which matters when the default is expensive or has side effects. Here the input was \`Some\`, so at runtime the bad argument was never called and the output looked fine. Try \`greet("lin")\` on the broken version: it crashes with "onNone is not a function". The type checker caught a runtime bug that only shows up on the empty path.`
+      explanation: `\`getOrElse\` takes a function \`() => B\`, not a \`B\`. The function is called only when the Option is \`None\`. This matters when the default is expensive to compute or has a side effect. Here the input was \`Some\`, so at runtime the wrong argument was never called and the output looked correct. Call \`greet("lin")\` in the broken version: it stops with "onNone is not a function". The type checker found a runtime error that only shows on the None path.`
     },
     {
       id: "data-types-c3",
       title: "An Option inside an Option",
-      task: `\`run\` should print \`4\`, \`-1\`, \`-1\` (the square root when the input is a non-negative number, otherwise \`-1\`). It prints something else. Fix the pipeline without changing \`safeSqrt\` or \`parse\`.`,
+      task: `\`run\` must print \`4\`, \`-1\`, \`-1\`: the square root when the input is a number that is not negative, otherwise \`-1\`. It prints something else. Fix the pipeline. Do not change \`safeSqrt\` or \`parse\`.`,
       code: `import { Option } from "effect"
 
 const safeSqrt = (n: number): Option.Option<number> =>
@@ -547,16 +589,16 @@ for (const s of ["16", "-4", "abc"]) {
 -1
 -1`,
       hints: [
-        "Look at what the broken version prints for \"16\": some(4). Where did the extra some come from?",
-        "safeSqrt already returns an Option. Wrapping its result with map gives Option<Option<number>>.",
+        "Look at what the broken version prints for \"16\": some(4). Where does the extra some come from?",
+        "safeSqrt already returns an Option. map puts its result inside another Option: Option<Option<number>>.",
         "Use Option.flatMap for the safeSqrt step."
       ],
-      explanation: `\`Option.map\` wraps whatever the function returns, so a function that already returns an Option produces \`Option<Option<number>>\`. \`getOrElse\` then unwrapped one layer and printed the inner \`some(4)\`, and for \`-4\` it printed \`none()\` instead of \`-1\`. \`Option.flatMap\` flattens the nesting: the outer \`None\` and the inner \`None\` become one \`None\`. This is the same map-versus-flatMap distinction as for Effect, and it applies to Result too.`
+      explanation: `\`Option.map\` puts the result of the function inside an Option. When the function already returns an Option, the result is \`Option<Option<number>>\`. \`getOrElse\` removed one layer and printed the inner \`some(4)\`. For \`-4\` it printed \`none()\` instead of \`-1\`. \`Option.flatMap\` removes the extra layer: the outer \`None\` and the inner \`None\` become one \`None\`. This is the same difference between map and flatMap as for Effect, and it also applies to Result.`
     },
     {
       id: "data-types-c4",
-      title: "The missing case that leaked",
-      task: `\`displayName\` promises \`Effect.Effect<string>\`, an effect that cannot fail, but the body can. Handle the missing case so unknown ids produce \`guest\`, without changing the annotation. Expected output: \`ADA\` then \`guest\`.`,
+      title: "The absent case that got out",
+      task: `\`displayName\` declares \`Effect.Effect<string>\`, an effect that cannot fail. Its body can fail. Process the None case so that unknown ids give \`guest\`. Do not change the annotation. Expected output: \`ADA\`, then \`guest\`.`,
       code: `import { Effect, Option } from "effect"
 
 const names = new Map([[1, "Ada"], [2, "Lin"]])
@@ -597,16 +639,16 @@ Effect.runSync(program)
       expectedOutput: `ADA
 guest`,
       hints: [
-        "Read the type error: which error type is in the body's error channel that the annotation does not allow?",
-        "Effect.fromOption fails with NoSuchElementError when the Option is None. That failure has a _tag.",
+        "Read the type error. Which error type is in the error channel of the body, but not in the annotation?",
+        "Effect.fromOption fails with NoSuchElementError when the Option is None. This error has a _tag.",
         "Pipe the generator into Effect.catchTag(\"NoSuchElementError\", () => Effect.succeed(\"guest\"))."
       ],
-      explanation: `\`Effect.fromOption\` turned the \`None\` into a typed \`NoSuchElementError\`, so the body's real type is \`Effect<string, NoSuchElementError>\` and the annotation \`Effect<string>\` is a lie the compiler refuses. Handling the error with \`catchTag\` removes it from the error channel and the annotation becomes true. Compare with plain TypeScript, where \`names.get(3)!.toUpperCase()\` compiles and crashes at runtime. Another valid fix is to fold the Option before entering the Effect with \`Option.match\` or \`Option.getOrElse\`; both make the missing case explicit.`
+      explanation: `\`Effect.fromOption\` converted the \`None\` to a typed \`NoSuchElementError\`. The real type of the body is \`Effect<string, NoSuchElementError>\`. The annotation \`Effect<string>\` is not true, and the compiler rejects it. \`catchTag\` removes the error from the error channel, and the annotation becomes true. In plain TypeScript, \`names.get(3)!.toUpperCase()\` compiles and stops at runtime. A second correct fix is to convert the Option before the effect, with \`Option.match\` or \`Option.getOrElse\`. Both make the None case explicit.`
     },
     {
       id: "data-types-c5",
-      title: "Two what?",
-      task: `The report takes about 30 milliseconds and the code intends to give it two seconds. Instead it prints \`gave up\`. Fix the timeout so the program prints \`report ready\`.`,
+      title: "The unit of the timeout",
+      task: `The report takes about 30 milliseconds. The code intends to wait 2 seconds. It prints \`gave up\`. Fix the timeout so that the program prints \`report ready\`.`,
       code: `import { Effect } from "effect"
 
 // Simulates a call that takes about 30ms
@@ -635,16 +677,16 @@ Effect.runPromise(program).then(console.log)
 `,
       expectedOutput: `report ready`,
       hints: [
-        "What unit does a bare number mean when passed as a Duration.Input?",
-        "Lesson 4's table: a number is milliseconds. Two milliseconds is not two seconds.",
+        "What unit does a bare number have when you give it as a Duration.Input?",
+        "See the table in lesson 4: a number is milliseconds. 2 milliseconds is not 2 seconds.",
         "Use Effect.timeout(\"2 seconds\") or Effect.timeout(Duration.seconds(2))."
       ],
-      explanation: `A bare number in a \`Duration.Input\` position means milliseconds, so \`timeout(2)\` gave the report two milliseconds and it lost the race every time. Writing \`"2 seconds"\` or \`Duration.seconds(2)\` puts the unit in the code where a reviewer can see it. This is the whole reason \`Duration\` exists: the compiler cannot tell \`2\` from \`2000\`, but it can read \`"2 seconds"\`.`
+      explanation: `A bare number in a \`Duration.Input\` position means milliseconds. \`timeout(2)\` gave the report 2 milliseconds, and the timeout always came first. \`"2 seconds"\` or \`Duration.seconds(2)\` puts the unit in the code, where a reviewer can see it. The compiler cannot tell \`2\` from \`2000\`, but it can read \`"2 seconds"\`. This is the reason \`Duration\` exists.`
     },
     {
       id: "data-types-c6",
       title: "The date that did not move",
-      task: `A trial lasts 30 days from signup. The program prints the signup date instead of the end date. Make it print \`trial ends 2024-03-30\`.`,
+      task: `A trial ends 30 days after signup. The program prints the signup date, not the end date. Make it print \`trial ends 2024-03-30\`.`,
       code: `import { DateTime } from "effect"
 
 const signup = DateTime.makeUnsafe("2024-02-29T10:00:00Z")
@@ -666,11 +708,11 @@ console.log("trial ends", DateTime.formatIsoDate(trialEnds))
 `,
       expectedOutput: `trial ends 2024-03-30`,
       hints: [
-        "Does DateTime.add change its argument, or return something?",
-        "Lesson 5 printed the original DateTime after doing math on it and it was unchanged.",
-        "Assign the result: const trialEnds = DateTime.add(signup, { days: 30 })."
+        "Does DateTime.add change its argument, or does it return a new value?",
+        "Lesson 5 printed the original DateTime after the math, and it was unchanged.",
+        "Keep the result: const trialEnds = DateTime.add(signup, { days: 30 })."
       ],
-      explanation: `\`DateTime\` values are immutable. \`DateTime.add\` returns a new value and leaves \`signup\` alone, so the result was thrown away and \`trialEnds\` still pointed at the signup. With a JS \`Date\`, \`setDate\` mutates in place and the same code would have "worked", while also silently changing \`signup\` for everyone else holding it. Immutability means the only way to get the new date is to keep the return value, which is what makes the value safe to share.`
+      explanation: `\`DateTime\` values are immutable. \`DateTime.add\` returns a new value and does not change \`signup\`. The program did not keep the result, so \`trialEnds\` was still the signup date. With a JS \`Date\`, \`setDate\` changes the object in place. The same code would give the correct output, and it would also change \`signup\` for all other code that holds it. With an immutable value, the only way to get the new date is to keep the return value. That is what makes the value safe to share.`
     }
   ],
   problems: [
@@ -678,13 +720,13 @@ console.log("trial ends", DateTime.formatIsoDate(trialEnds))
       id: "data-types-p1",
       title: "Config with fallbacks",
       spec: `
-Settings can come from three places, checked in order: command-line arguments, environment variables (keys are uppercase), then defaults. Build it with \`Option\`:
+Settings can come from 3 places. Check them in this sequence: command-line arguments, environment variables (the keys are upper-case), then defaults. Build it with \`Option\`:
 
-1. \`fromCli(key)\`, \`fromEnv(key)\` and \`fromDefaults(key)\` each return \`Option<string>\` using \`Option.fromNullishOr\`. \`fromEnv\` looks up \`key.toUpperCase()\`.
-2. \`setting(key)\` returns the first \`Some\` of the three, using \`Option.orElse\`.
-3. \`portNumber\` parses \`setting("port")\` into a number with \`Option.flatMap\` (a \`None\` if it is not a number), defaulting to \`0\`.
+1. \`fromCli(key)\`, \`fromEnv(key)\` and \`fromDefaults(key)\` each return \`Option<string>\`. Use \`Option.fromNullishOr\`. \`fromEnv\` looks up \`key.toUpperCase()\`.
+2. \`setting(key)\` returns the first \`Some\` of the 3. Use \`Option.orElse\`.
+3. \`portNumber\` converts \`setting("port")\` to a number with \`Option.flatMap\`. A text that is not a number gives \`None\`. The default is \`0\`.
 
-Print one line per key for \`host\`, \`port\`, \`mode\` and \`timeout\`, then the port as a number. Exact output:
+Print 1 line per key for \`host\`, \`port\`, \`mode\` and \`timeout\`. Then print the port as a number. Exact output:
 
 \`\`\`
 host=0.0.0.0
@@ -752,16 +794,16 @@ mode=dev
 timeout=missing
 port as number: 8080`,
       hints: [
-        "Each source function is one line: Option.fromNullishOr(source[key]).",
-        "Option.orElse takes a function returning an Option, so it only runs when needed. Chain two of them.",
-        "parseNumber returns an Option, so combine it with Option.flatMap, not map."
+        "Each source function is 1 line: Option.fromNullishOr(source[key]).",
+        "Option.orElse takes a function that returns an Option. It runs the function only when necessary. Chain 2 of them.",
+        "parseNumber returns an Option. Combine it with Option.flatMap, not with map."
       ]
     },
     {
       id: "data-types-p2",
       title: "Meeting agenda",
       spec: `
-A meeting starts at \`2024-09-02T09:00:00Z\` and has four items with durations given as strings:
+A meeting starts at \`2024-09-02T09:00:00Z\`. It has 4 items. The durations are text:
 
 \`\`\`
 Standup        "15 minutes"
@@ -770,7 +812,7 @@ Break          "10 minutes"
 Planning       "1 hour"
 \`\`\`
 
-Walk the agenda with \`DateTime.addDuration\`, keeping a running \`DateTime\`. For each item print \`HH:MM-HH:MM Title\` where the times are UTC hours and minutes from \`DateTime.toPartsUtc\`, zero-padded with \`String.prototype.padStart\`. Then print the total length as \`total <Duration.format of DateTime.distance(start, end)>\` and finally the end time in Tokyo using \`DateTime.setZoneNamedUnsafe\` and \`DateTime.formatIsoZoned\`. Exact output:
+Walk through the agenda with \`DateTime.addDuration\`. Keep the current \`DateTime\` in a variable. For each item, print \`HH:MM-HH:MM Title\`. The times are UTC hours and minutes from \`DateTime.toPartsUtc\`, with a zero in front from \`String.prototype.padStart\`. Then print the total length: \`total \` plus \`Duration.format\` of \`DateTime.distance(start, end)\`. Then print the end time in Tokyo with \`DateTime.setZoneNamedUnsafe\` and \`DateTime.formatIsoZoned\`. Exact output:
 
 \`\`\`
 09:00-09:15 Standup
@@ -833,26 +875,26 @@ console.log("ends in Tokyo at " + DateTime.formatIsoZoned(tokyo))
 total 2h 10m
 ends in Tokyo at 2024-09-02T20:10:00.000+09:00[Asia/Tokyo]`,
       hints: [
-        "DateTime.addDuration accepts the string form directly, so the agenda entries can be passed as they are.",
-        "Keep a `let current` and reassign it to the returned DateTime after each item; nothing mutates.",
-        "DateTime.distance(start, end) returns a Duration; Duration.format prints it as 2h 10m."
+        "DateTime.addDuration accepts the text form directly. Give it the agenda entries as they are.",
+        "Keep a `let current`. After each item, set it to the DateTime that addDuration returned. Nothing changes in place.",
+        "DateTime.distance(start, end) returns a Duration. Duration.format prints it as 2h 10m."
       ]
     },
     {
       id: "data-types-p3",
       title: "Warehouse stock",
       spec: `
-Track stock per SKU per warehouse. A key is \`class Sku extends Data.Class<{ readonly warehouse: string; readonly code: string }>\`. Stock movements arrive as a \`Chunk\` of \`{ sku: Sku; delta: number }\`:
+Track the stock per SKU and per warehouse. A key is \`class Sku extends Data.Class<{ readonly warehouse: string; readonly code: string }>\`. Stock movements arrive as a \`Chunk\` of \`{ sku: Sku; delta: number }\`:
 
 \`\`\`
 A/bolt +100,  B/bolt +8,  A/bolt -30,  A/nut +12
 \`\`\`
 
-1. \`apply(stock, movement)\` returns a new \`HashMap<Sku, number>\` with the delta added to the current quantity (\`0\` if absent). Use \`HashMap.get\` + \`Option.getOrElse\` and \`HashMap.set\`.
-2. Fold the Chunk with \`Chunk.reduce\` starting from \`HashMap.empty()\`.
-3. \`report(warehouse, code)\` looks up a **fresh** \`new Sku(...)\` and prints \`W/code: qty\` or \`W/code: none\`.
+1. \`apply(stock, movement)\` returns a new \`HashMap<Sku, number>\`. It adds the delta to the current quantity, or to \`0\` when the key is absent. Use \`HashMap.get\` with \`Option.getOrElse\`, then \`HashMap.set\`.
+2. Fold the Chunk with \`Chunk.reduce\`. Start from \`HashMap.empty()\`.
+3. \`report(warehouse, code)\` looks up a **new** \`new Sku(...)\` and prints \`W/code: qty\` or \`W/code: none\`.
 
-Print reports for A/bolt, B/bolt, A/nut and C/bolt, then the number of distinct SKUs with \`HashMap.size\`. Exact output:
+Print the reports for A/bolt, B/bolt, A/nut and C/bolt. Then print the number of different SKUs with \`HashMap.size\`. Exact output:
 
 \`\`\`
 A/bolt: 70
@@ -871,7 +913,7 @@ interface Movement {
   readonly delta: number
 }
 
-const movements = Chunk.make<ReadonlyArray<Movement>>(
+const movements: Chunk.Chunk<Movement> = Chunk.make(
   { sku: new Sku({ warehouse: "A", code: "bolt" }), delta: 100 },
   { sku: new Sku({ warehouse: "B", code: "bolt" }), delta: 8 },
   { sku: new Sku({ warehouse: "A", code: "bolt" }), delta: -30 },
@@ -895,7 +937,7 @@ interface Movement {
   readonly delta: number
 }
 
-const movements = Chunk.make<ReadonlyArray<Movement>>(
+const movements: Chunk.Chunk<Movement> = Chunk.make(
   { sku: new Sku({ warehouse: "A", code: "bolt" }), delta: 100 },
   { sku: new Sku({ warehouse: "B", code: "bolt" }), delta: 8 },
   { sku: new Sku({ warehouse: "A", code: "bolt" }), delta: -30 },
@@ -929,36 +971,36 @@ A/nut: 12
 C/bolt: none
 distinct skus: 3`,
       hints: [
-        "apply is two lines: read the current quantity as an Option with a default of 0, then HashMap.set with the sum.",
+        "apply is 2 lines: read the current quantity as an Option with a default of 0, then HashMap.set with the sum.",
         "Chunk.reduce(chunk, initial, (acc, item) => ...) works like Array.prototype.reduce.",
-        "Because Sku extends Data.Class, a new Sku({ warehouse: \"A\", code: \"bolt\" }) finds the entry stored under a different instance."
+        "Sku extends Data.Class, so a new Sku({ warehouse: \"A\", code: \"bolt\" }) finds the entry that a different instance stored."
       ]
     }
   ],
   recall: [
     {
-      q: "You have a value of type `string | undefined`. Which function turns it into an `Option<string>`, and what happens to the `undefined`?",
-      a: "`Option.fromNullishOr(value)`. `undefined` (and `null`) become `None`; anything else becomes `Some`. The v3 name `fromNullable` no longer exists."
+      q: "You have a value of type `string | undefined`. Which function converts it to an `Option<string>`? What happens to `undefined`?",
+      a: "`Option.fromNullishOr(value)`. `undefined` and `null` become `None`. Each other value becomes `Some`. The v3 name `fromNullable` does not exist."
     },
     {
       q: "What would the type of `Effect.fromOption(Option.some(42))` be?",
-      a: "`Effect<number, NoSuchElementError>`. A `None` fails with `Cause.NoSuchElementError`. Pass a second argument `() => myError` to fail with your own error type instead."
+      a: "`Effect<number, NoSuchElementError>`. A `None` fails with `Cause.NoSuchElementError`. Give a second argument `() => myError` to fail with your own error type."
     },
     {
       q: "Can you `yield*` an `Option` directly inside `Effect.gen` in this version?",
-      a: "No. It is a type error and the runtime rejects it. Use `Effect.fromOption(opt)` (or `Effect.fromResult(res)` for a `Result`) to move the value into an Effect first. `Option.gen` and `Result.gen` exist for generators over Options and Results themselves."
+      a: "No. It is a type error, and the runtime rejects it. Use `Effect.fromOption(opt)`, or `Effect.fromResult(res)` for a `Result`, to move the value into an effect first. `Option.gen` and `Result.gen` exist for generators over Options and Results."
     },
     {
-      q: "Which would you reach for to say \"wait half a second\" in `Effect.sleep`, and why not `500`?",
-      a: "`Effect.sleep(\"500 millis\")` or `Effect.sleep(Duration.millis(500))`. A bare `500` also works and means milliseconds, but the unit is invisible in the code; the string or constructor form makes it explicit and stops the seconds-versus-milliseconds bug."
+      q: "Which function would you use to wait half a second in `Effect.sleep`? Why not `500`?",
+      a: "`Effect.sleep(\"500 millis\")` or `Effect.sleep(Duration.millis(500))`. A bare `500` also works and means milliseconds, but the unit is not visible in the code. The text form or the constructor makes the unit explicit and prevents the seconds and milliseconds mistake."
     },
     {
       q: "What is the difference between `DateTime.now` and `DateTime.nowUnsafe()`?",
-      a: "`DateTime.now` is an Effect that reads the Clock service, so tests can control time with `TestClock`. `DateTime.nowUnsafe()` reads the system clock immediately and returns a `DateTime.Utc`; use it only outside Effect code."
+      a: "`DateTime.now` is an effect that reads the Clock service, so tests can control the time with `TestClock`. `DateTime.nowUnsafe()` reads the system clock at once and returns a `DateTime.Utc`. Use it only outside Effect code."
     },
     {
       q: "Why does `HashMap.get(map, { id: 1 })` find an entry when `new Map().get({ id: 1 })` does not?",
-      a: "`HashMap` compares keys with Effect's structural `Equal` and buckets them with `Hash`, so a fresh object with the same contents is the same key. A JS `Map` compares object keys by reference. `Data.Class` instances, Options, Chunks and plain objects all work as HashMap keys for the same reason."
+      a: "`HashMap` compares keys with the structural `Equal` of Effect and puts them in buckets with `Hash`. A new object with the same contents is the same key. A JS `Map` compares object keys by reference. `Data.Class` instances, Options, Chunks and plain objects all work as HashMap keys for the same reason."
     }
   ]
 }

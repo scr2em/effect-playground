@@ -6,7 +6,7 @@ const section: Section = {
   order: 3,
   summary: "Services, the R channel, and Layers: dependencies tracked by the compiler and satisfied once at the edge.",
   intro: `
-**The problem.** Every real program needs things it did not create: a database, a logger, a clock, config. Plain TypeScript gives you three ways to get them, and each one hurts.
+**The problem.** Every real program needs things that it did not create: a database, a logger, a clock, a config. Plain TypeScript gives you 3 ways to get them. Each way has a cost.
 
 \`\`\`ts
 // 1. Pass everything down, five levels deep
@@ -22,36 +22,43 @@ async function placeOrder(order: Order) { return db.insert(order) }   // untesta
 const db = container.resolve<Database>("Database")   // typo in the string? Crashes at startup, or later
 \`\`\`
 
-Option 1 turns every signature into a bucket of unrelated arguments. Option 2 hides the dependency completely, so a test cannot swap it and the connection opens at import time. Option 3 checks nothing at compile time. In all three, the question "what does this function need in order to run?" has no answer in the type.
+Option 1 puts unrelated arguments in every signature. Option 2 hides the dependency completely. A test cannot replace it, and the connection opens at import time. Option 3 checks nothing at compile time. In all 3 options, the type does not answer the question "what does this function need to run?".
 
 ### The shift
 
-Today you think of a dependency as **something you pass in or reach out for**. Effect asks you to think of it as **a requirement recorded in the type**. When code reads the \`Database\` service, \`Database\` appears in the third type parameter, \`R\`. When you combine two effects, their requirements are combined. At the very top of the program, \`R\` must be \`never\`, which means every requirement has been satisfied. If one is missing, the program does not compile.
+Today you think of a dependency as **a value that you pass in or get from a module**. Effect asks you to think of it as **a requirement recorded in the type**. When code reads the \`Database\` service, \`Database\` appears in the third type parameter, \`R\`. When you combine 2 effects, Effect combines their requirements. At the top of the program, \`R\` must be \`never\`. This means that every requirement is satisfied. If 1 requirement is missing, the program does not compile.
 
-Satisfying a requirement is done once, at the edge, with a **Layer**: a recipe that says how to build a service, possibly from other services. Layers compose into a graph, the graph is built once, and each service in it is constructed a single time and shared.
+You satisfy a requirement once, at the top of the program, with a **Layer**. A layer is a value that describes how to build a service, possibly from other services. You combine layers into a graph. Effect builds the graph once. Effect builds each service in the graph 1 time and shares it.
 
-The payoff: business logic never mentions how a service is built. Swapping a real mailer for a fake one in tests is a one-line change at the edge. Config never travels through five signatures. And the compiler, not a startup crash, tells you what is missing.
+The result: business logic never says how a service is built. To replace a real mailer with a fake one in tests, you change 1 line at the top of the program. Config does not travel through 5 signatures. The compiler tells you what is missing, not a crash at startup.
 
 | | Arguments | Module singleton | DI container | Effect |
 |---|---|---|---|---|
-| Visible in the type | Yes, but cluttered | No | No | Yes, in \`R\` |
-| Swappable in tests | Yes, painfully | No | Yes | Yes, provide a different Layer |
+| Visible in the type | Yes, but with many arguments | No | No | Yes, in \`R\` |
+| Replaceable in tests | Yes, with much work | No | Yes | Yes, provide a different layer |
 | Missing dependency found | Compile time | Never | Runtime | Compile time |
-| Construction order | Manual | Import order | Container | Derived from the Layer graph |
-| Built once and shared | Manual | Yes | Usually | Yes, memoized per graph |
+| Construction order | Manual | Import order | Container | From the layer graph |
+| Built once and shared | Manual | Yes | Usually | Yes, memoized in each graph |
 
-In this section you will define services, read \`R\`, build Layers, wire a small graph, swap implementations, and see memoization in action.
+In this section, you:
+
+- define services
+- read \`R\`
+- build layers
+- connect a small graph
+- replace implementations
+- see memoization
 `,
   lessons: [
     {
       id: "requirements-management-l1",
       title: "A requirement shows up in R",
       explain: `
-A **service** is two things bundled together: a **tag** (a unique key, used as a value) and a **shape** (the TypeScript type of what the key points to). The class syntax below defines both at once. \`Logger\` the class is the tag, and the object type between the angle brackets is the shape.
+A **service** is 2 things together: a **tag** and a **shape**. The tag is a unique key that you use as a value. The shape is the TypeScript type of the value that the key points to. The class syntax below defines both at the same time. The class \`Logger\` is the tag. The object type between the angle brackets is the shape.
 
-Inside \`Effect.gen\`, writing \`yield* Logger\` does two things. At runtime it looks up the implementation. At compile time it adds \`Logger\` to the \`R\` of the surrounding effect. Nothing about *how* to log appears in \`program\`, only *that* it needs a logger.
+Inside \`Effect.gen\`, \`yield* Logger\` does 2 things. At runtime, it gets the implementation. At compile time, it adds \`Logger\` to the \`R\` of the effect around it. \`program\` does not say *how* to log. It says only *that* it needs a logger.
 
-\`Effect.provideService\` is the one-off way to satisfy a requirement: hand it the tag and an implementation, and \`Logger\` disappears from \`R\`. Only then does \`runSync\` accept the program.
+\`Effect.provideService\` satisfies 1 requirement with 1 call. Give it the tag and an implementation, and Effect removes \`Logger\` from \`R\`. Only then does \`runSync\` accept the program.
 `,
       code: `import { Context, Effect } from "effect"
 
@@ -79,23 +86,23 @@ Effect.runSync(runnable)
 `,
       expectedOutput: `[log] order 42 placed
 [log] receipt emailed`,
-      after: `Try \`Effect.runSync(program)\` instead of \`runnable\`. The compiler answers: \`Type 'Logger' is not assignable to type 'never'\`. That is the R channel doing its job: a missing dependency is a type error, not a crash on the first request.`
+      after: `Change \`Effect.runSync(runnable)\` to \`Effect.runSync(program)\`. The compiler reports: \`Type 'Logger' is not assignable to type 'never'\`. This is the purpose of the R channel: a missing dependency is a type error, not a crash at the first request.`
     },
     {
       id: "requirements-management-l2",
       title: "Three ways to declare a service",
       explain: `
-The class syntax is the default. Two more forms exist for specific situations.
+The class syntax is the default. 2 more forms exist for specific situations.
 
 | Form | Write it as | Use when |
 |---|---|---|
 | Class | \`class Db extends Context.Service<Db, Shape>()("Db") {}\` | Almost always. The class is a clean identifier in \`R\`. |
-| Function | \`const Clock = Context.Service<Clock>("Clock")\` | You already have an interface named \`Clock\` and want a one-liner. |
-| Reference | \`Context.Reference<T>("Tz", { defaultValue })\` | The service has a sensible default and is only sometimes overridden. |
+| Function | \`const Clock = Context.Service<Clock>("Clock")\` | You already have an interface named \`Clock\` and want 1 line. |
+| Reference | \`Context.Reference<T>("Tz", { defaultValue })\` | The service has a good default. You override it only sometimes. |
 
-In the function form the interface itself plays the role of identifier, so \`R\` shows \`Clock\`. Two services with the same string key but different shapes would collide at runtime, so keep keys unique.
+In the function form, the interface is the identifier, so \`R\` shows \`Clock\`. Note: 2 services with the same string key but different shapes collide at runtime. Keep the keys unique.
 
-A \`Reference\` is the interesting one. Because it always has a default, reading it adds **nothing** to \`R\`. You can run the program without providing it, and you can still override it with \`provideService\` when you want to. Config values and feature flags are the typical use.
+A \`Reference\` is different. It always has a default. When you read it, it adds **nothing** to \`R\`. You can run the program without it, and you can still override it with \`provideService\` when you want to. Config values and feature flags are the usual use.
 `,
       code: `import { Context, Effect } from "effect"
 
@@ -125,13 +132,13 @@ Effect.runSync(program.pipe(
 `,
       expectedOutput: `time 1000 zone UTC
 time 2000 zone Europe/Berlin`,
-      after: `Two equivalent ways to read a service, useful outside of \`Effect.gen\`: \`Effect.service(Clock)\` returns the same effect as \`yield* Clock\`, and \`Clock.use((c) => Effect.succeed(c.now()))\` reads it and calls a method in one step. Prefer \`yield*\` in generators, it keeps the requirement visible where it is used.`
+      after: `There are 2 equivalent ways to read a service outside \`Effect.gen\`. \`Effect.service(Clock)\` returns the same effect as \`yield* Clock\`. \`Clock.use((c) => Effect.succeed(c.now()))\` reads the service and calls a method in 1 step. In generators, use \`yield*\`. It keeps the requirement visible where you use it.`
     },
     {
       id: "requirements-management-l3",
       title: "Layers: a recipe for building a service",
       explain: `
-\`provideService\` takes an implementation you already hold. Real services need to be *built*: read config, open a connection, print a startup line. A **Layer** is an Effect that builds a service. Compare the plain TypeScript \`main\` you have written many times:
+\`provideService\` takes an implementation that you already hold. Real services must be *built*: read the config, open a connection, print a startup line. A **Layer** is an effect that builds a service. Compare the plain TypeScript \`main\` that you have written many times:
 
 \`\`\`ts
 async function main() {
@@ -141,14 +148,14 @@ async function main() {
 }
 \`\`\`
 
-With Effect the construction becomes a value, \`DatabaseLive\`, and \`Effect.provide\` wires it into the program. Two constructors cover most cases:
+With Effect, the construction becomes a value, \`DatabaseLive\`. \`Effect.provide\` connects it to the program. 2 constructors cover most cases:
 
 | Constructor | Takes | Use when |
 |---|---|---|
 | \`Layer.succeed(Tag, impl)\` | A plain value | The implementation needs no setup |
-| \`Layer.effect(Tag, effect)\` | An Effect that returns the implementation | Setup is needed: config, connections, logging |
+| \`Layer.effect(Tag, effect)\` | An effect that returns the implementation | The implementation needs setup: config, connections, logs |
 
-Read the type \`Layer<Database, never, never>\` as "provides \`Database\`, cannot fail while building, needs nothing to build."
+Read the type \`Layer<Database, never, never>\` as "provides \`Database\`, cannot fail when it builds, needs nothing to build."
 `,
       code: `import { Context, Effect, Layer } from "effect"
 
@@ -184,21 +191,21 @@ Effect.runSync(program.pipe(Effect.provide(DatabaseLive)))
       expectedOutput: `connecting to database
 row for: select * from users
 row for: select * from orders`,
-      after: `"connecting to database" printed once although \`query\` ran twice. The layer's build effect runs when the graph is built, then the same implementation is handed to every \`yield* Database\`. Try replacing \`Layer.effect\` with \`Layer.succeed(Database, { query: ... })\` for a service that needs no setup.`
+      after: `"connecting to database" printed once, but \`query\` ran 2 times. The build effect of the layer runs when Effect builds the graph. Then Effect gives the same implementation to every \`yield* Database\`. For a service that needs no setup, replace \`Layer.effect\` with \`Layer.succeed(Database, { query: ... })\`.`
     },
     {
       id: "requirements-management-l4",
       title: "A graph of layers: provide, provideMerge, merge",
       explain: `
-A layer built with \`Layer.effect\` can itself \`yield*\` other services. Those become the layer's own requirements: \`Layer<UserRepo, never, Database>\` means "provides \`UserRepo\`, but needs \`Database\` to be built." Wiring is done bottom-up with three functions.
+A layer built with \`Layer.effect\` can itself \`yield*\` other services. Those services become the requirements of the layer. \`Layer<UserRepo, never, Database>\` means "provides \`UserRepo\`, but needs \`Database\` to build." You connect layers from the bottom up with 3 functions.
 
 | Function | Meaning | What the result provides |
 |---|---|---|
-| \`A.pipe(Layer.provide(B))\` | B feeds A | Only A. B is hidden. |
-| \`A.pipe(Layer.provideMerge(B))\` | B feeds A | A and B. |
-| \`Layer.merge(A, B)\` | Side by side, no relationship | A and B. |
+| \`A.pipe(Layer.provide(B))\` | B provides its service to A | Only A. B is hidden. |
+| \`A.pipe(Layer.provideMerge(B))\` | B provides its service to A | A and B. |
+| \`Layer.merge(A, B)\` | No relation between A and B | A and B. |
 
-The graph below is what the code builds. Each arrow is one \`Layer.provide\`, and the top is what \`program\` needs:
+The diagram below shows what the code builds. Each arrow is 1 \`Layer.provide\`. The top is what \`program\` needs:
 
 \`\`\`
        program        needs: UserRepo, Logger
@@ -212,7 +219,7 @@ DatabaseLive
 ConfigLive
 \`\`\`
 
-If you forget one arrow, say \`ConfigLive\`, the requirement bubbles up to the top and the compiler reports \`Type 'Config' is not assignable to type 'never'\` at the \`runSync\` call.
+If you forget 1 arrow, for example \`ConfigLive\`, the requirement moves up to the top. The compiler reports \`Type 'Config' is not assignable to type 'never'\` at the \`runSync\` call.
 `,
       code: `import { Context, Effect, Layer } from "effect"
 
@@ -269,17 +276,17 @@ Effect.runSync(program.pipe(Effect.provide(AppLive)))
 `,
       expectedOutput: `query on postgres://prod: select name from users where id = 1
 [log] found Ada`,
-      after: `\`program\` cannot \`yield* Config\` right now, because \`Layer.provide\` hid it. Change the inner \`Layer.provide(ConfigLive)\` to \`Layer.provideMerge(ConfigLive)\` and the outer one too, and \`Config\` becomes available to \`program\`. Hiding is usually what you want: the app should not know which database URL the repository uses.`
+      after: `\`program\` cannot \`yield* Config\` now, because \`Layer.provide\` hides it. Change the inner \`Layer.provide(ConfigLive)\` to \`Layer.provideMerge(ConfigLive)\`. Change the outer \`Layer.provide\` to \`Layer.provideMerge\` also. Then \`Config\` becomes available to \`program\`. Usually you want to hide it: the app must not know which database URL the repository uses.`
     },
     {
       id: "requirements-management-l5",
       title: "Swapping implementations: real versus fake",
       explain: `
-This is the lesson that pays for all the others. \`signUp\` below needs a \`Mailer\`. It does not know whether that mailer talks to an SMTP server or writes to an array. The same \`signUp\` runs against both, and the only difference is which layer you provide at the edge.
+This lesson shows the largest benefit. \`signUp\` below needs a \`Mailer\`. It does not know if the mailer sends to an SMTP server or writes to an array. The same \`signUp\` runs with both. The only difference is which layer you provide at the top of the program.
 
-In plain TypeScript this needs either constructor injection everywhere, or a module mock in the test runner that patches \`import\` at load time. Here it is a normal value: a layer. The test layer is often shorter than the mocking setup would be, and it is type-checked against the same shape as production, so the fake cannot drift.
+In plain TypeScript, this needs constructor injection in every class, or a module mock in the test runner that patches \`import\` at load time. Here it is a normal value: a layer. The test layer is often shorter than the mock setup. The compiler checks it against the same shape as production, so the fake cannot become different from production.
 
-Naming convention from the Effect codebase: \`Mailer.layer\` for the primary implementation and a descriptive suffix for variants, like \`layerTest\`. This lesson uses \`MailerLive\` and \`MailerFake\` to make the contrast obvious.
+The Effect codebase uses this convention for names: \`Mailer.layer\` for the primary implementation, and a descriptive suffix for variants, for example \`layerTest\`. This lesson uses \`MailerLive\` and \`MailerFake\` to make the difference clear.
 `,
       code: `import { Context, Effect, Layer } from "effect"
 
@@ -316,13 +323,13 @@ console.log("fake recorded:", sent.join(", "))
 signed up ada@example.com
 signed up lin@example.com
 fake recorded: Welcome -> lin@example.com`,
-      after: `Try removing the \`send\` property from \`MailerFake\`. It fails to compile, because \`Layer.succeed\` checks the implementation against the shape declared on the tag. A fake that no longer matches production is caught before any test runs.`
+      after: `Remove the \`send\` property from \`MailerFake\`. The program does not compile, because \`Layer.succeed\` checks the implementation against the shape declared on the tag. The compiler finds a fake that does not match production before any test runs.`
     },
     {
       id: "requirements-management-l6",
       title: "Layers are built once: memoization",
       explain: `
-When two layers in the same graph both depend on \`Config\`, you might expect \`Config\` to be built twice. It is not. Effect memoizes layers by identity: the same layer value, reached from two places in one graph, is built once and the result is shared.
+When 2 layers in the same graph both depend on \`Config\`, you can expect Effect to build \`Config\` 2 times. It does not. Effect memoizes layers by identity. Memoization means that Effect keeps the result of the first build and reuses it. Effect builds the same layer value once, even when 2 places in 1 graph use it, and shares the result.
 
 \`\`\`
           AppLive (merge)
@@ -332,9 +339,9 @@ When two layers in the same graph both depend on \`Config\`, you might expect \`
    ConfigLive   ==   ConfigLive     same value, built once
 \`\`\`
 
-This matters for anything expensive or stateful: a connection pool, a metrics client, a cache. Every service in the graph sees the same instance, which is what a module singleton gave you, without the import-time side effects and with the ability to swap it.
+This matters for anything expensive or stateful: a connection pool, a metrics client, a cache. Every service in the graph gets the same instance. A module singleton also gives you this, but with side effects at import time and no way to replace it.
 
-The rule from the Effect team: compose the whole graph with \`Layer.provide\` and \`Layer.merge\`, then call \`Effect.provide\` **once**. Memoization is a safety net, not a substitute for composing properly.
+The Effect team gives this rule: combine the whole graph with \`Layer.provide\` and \`Layer.merge\`, then call \`Effect.provide\` **once**. Memoization is a safety measure, not a replacement for correct composition.
 `,
       code: `import { Context, Effect, Layer } from "effect"
 
@@ -371,14 +378,51 @@ Effect.runSync(program.pipe(Effect.provide(Layer.merge(DatabaseLive, CacheLive))
       expectedOutput: `building Config
 db for shop
 cache for shop`,
-      after: `To force a second build on purpose, for example to give a test its own isolated pool, wrap one occurrence in \`Layer.fresh(ConfigLive)\`: "building Config" then prints twice. Memoization is per graph, so if you split one program into two separate \`Effect.provide\` calls run one after the other, each builds its own copy. The fix is always the same: compose first, provide once.`
+      after: `To force a second build, for example to give a test its own isolated pool, wrap 1 occurrence in \`Layer.fresh(ConfigLive)\`. Then "building Config" prints 2 times. Memoization applies to 1 graph. If you split 1 program into 2 separate \`Effect.provide\` calls that run one after the other, each call builds its own copy. The correction is always the same: combine first, provide once.`
+    }
+  ],
+  dosAndDonts: [
+    {
+      do: "Read a service with `yield* Tag` inside `Effect.gen`.",
+      dont: "Do not import a module-level singleton inside business logic.",
+      why: "A singleton hides the dependency, so `R` does not show it, and a test cannot replace it."
+    },
+    {
+      do: "Use `Layer.effect(Tag, effect)` when the implementation needs setup.",
+      dont: "Do not pass an effect to `Layer.succeed`.",
+      why: "`Layer.succeed` stores the effect itself as the service, so the service has no methods, and the program does not compile."
+    },
+    {
+      do: "Combine the whole layer graph first, then call `Effect.provide` once at the top.",
+      dont: "Do not call `Effect.provide` on each step of the program.",
+      why: "Each `Effect.provide` builds its own graph, so Effect builds an expensive layer once for each call."
+    },
+    {
+      do: "Use `Layer.provide` to hide an internal dependency, for example a database URL.",
+      dont: "Do not use `Layer.provideMerge` for every connection in the graph.",
+      why: "`provideMerge` exposes the dependency, so code that uses the graph can depend on an internal detail."
+    },
+    {
+      do: "Use `Context.Reference` with a `defaultValue` for config and flags that have a good default.",
+      dont: "Do not declare an optional setting with `Context.Service`.",
+      why: "`Context.Service` adds a hard requirement to `R`, so the program does not compile without a provider."
+    },
+    {
+      do: "Give each service a unique string key.",
+      dont: "Do not use the same string key for 2 services with different shapes.",
+      why: "The 2 services collide at runtime, and one implementation replaces the other."
+    },
+    {
+      do: "Use `Layer.fresh` only when a test needs its own separate instance.",
+      dont: "Do not use `Layer.fresh` to correct a graph that builds a layer 2 times.",
+      why: "The cause is 2 separate `Effect.provide` calls, and `Layer.fresh` makes more builds, not fewer."
     }
   ],
   challenges: [
     {
       id: "requirements-management-c1",
       title: "Nobody provided it",
-      task: `The program is correct but does not compile: it needs a \`Clock\` and nothing supplies one. Satisfy the requirement so it prints \`the time is 42\`. Do not change \`program\`.`,
+      task: `The program is correct but does not compile. It needs a \`Clock\`, and nothing provides one. Satisfy the requirement so that the program prints \`the time is 42\`. Do not change \`program\`.`,
       code: `import { Context, Effect } from "effect"
 
 class Clock extends Context.Service<Clock, {
@@ -407,16 +451,16 @@ Effect.runSync(program.pipe(Effect.provideService(Clock, { now: () => 42 })))
 `,
       expectedOutput: `the time is 42`,
       hints: [
-        "Read the type error: which type is 'not assignable to never'? That is the unsatisfied requirement.",
-        "Lesson 1 satisfied a single requirement with one call that takes the tag and an implementation.",
+        "Read the type error. Which type is 'not assignable to never'? That type is the unsatisfied requirement.",
+        "Lesson 1 satisfied 1 requirement with 1 call that takes the tag and an implementation.",
         "Wrap the program: program.pipe(Effect.provideService(Clock, { now: () => 42 }))."
       ],
-      explanation: `\`program\` has type \`Effect<void, never, Clock>\`. \`runSync\` only accepts \`R = never\`, so the compiler refuses. \`Effect.provideService(Clock, impl)\` removes \`Clock\` from \`R\` by supplying an implementation. In a DI container this would have been a runtime "no provider for Clock" error, possibly on the first request in production. Here it never leaves your editor.`
+      explanation: `\`program\` has the type \`Effect<void, never, Clock>\`. \`runSync\` accepts only \`R = never\`, so the compiler rejects it. \`Effect.provideService(Clock, impl)\` provides an implementation and removes \`Clock\` from \`R\`. In a DI container, this is a runtime error "no provider for Clock", possibly at the first request in production. Here the error does not leave your editor.`
     },
     {
       id: "requirements-management-c2",
       title: "A recipe where a value was expected",
-      task: `\`DatabaseLive\` should print \`connecting\` once and then answer queries, but it does not compile. Fix the layer constructor so the program prints the two lines below.`,
+      task: `\`DatabaseLive\` must print \`connecting\` once and then answer queries, but it does not compile. Correct the layer constructor so that the program prints the 2 lines below.`,
       code: `import { Context, Effect, Layer } from "effect"
 
 class Database extends Context.Service<Database, {
@@ -462,16 +506,16 @@ Effect.runSync(program.pipe(Effect.provide(DatabaseLive)))
       expectedOutput: `connecting
 rows for select 1`,
       hints: [
-        "The error says property 'query' is missing on an Effect. The layer received a recipe, not an implementation.",
-        "Lesson 3 has a table with two constructors. One takes a value, the other takes an Effect.",
+        "The error says that property 'query' is missing on an Effect. The layer received a build effect, not an implementation.",
+        "Lesson 3 has a table with 2 constructors. One takes a value, the other takes an effect.",
         "Replace Layer.succeed with Layer.effect."
       ],
-      explanation: `\`Layer.succeed\` expects the finished implementation, so it tried to use the Effect itself as the service and found no \`query\` on it. \`Layer.effect\` expects an Effect that *produces* the implementation, runs it once when the graph is built, and stores the result. That is why "connecting" prints exactly once. Without the type check this would have crashed with "db.query is not a function" at the first query.`
+      explanation: `\`Layer.succeed\` expects the complete implementation. It tried to use the effect itself as the service, and found no \`query\` on it. \`Layer.effect\` expects an effect that *returns* the implementation. It runs that effect once when Effect builds the graph, and keeps the result. This is why "connecting" prints exactly once. Without the type check, the program crashes with "db.query is not a function" at the first query.`
     },
     {
       id: "requirements-management-c3",
       title: "The missing edge in the graph",
-      task: `\`DatabaseLive\` needs \`Config\` to be built, and the graph never supplies it, so the program does not compile. Wire \`ConfigLive\` into the graph (do not change \`program\` or the \`runSync\` line) so it prints \`rows from postgres://prod\`.`,
+      task: `\`DatabaseLive\` needs \`Config\` to build, and the graph does not provide it, so the program does not compile. Connect \`ConfigLive\` to the graph so that the program prints \`rows from postgres://prod\`. Do not change \`program\` or the \`runSync\` line.`,
       code: `import { Context, Effect, Layer } from "effect"
 
 class Config extends Context.Service<Config, { readonly dbUrl: string }>()("Config") {}
@@ -520,16 +564,16 @@ Effect.runSync(program.pipe(Effect.provide(AppLive)))
 `,
       expectedOutput: `rows from postgres://prod`,
       hints: [
-        "Hover DatabaseLive: its third type parameter is Config. That requirement has to be removed before the top.",
-        "Lesson 4 wires layers bottom-up. Which function feeds one layer into another?",
+        "Hover over DatabaseLive: its third type parameter is Config. You must remove that requirement before the top.",
+        "Lesson 4 connects layers from the bottom up. Which function provides one layer to another?",
         "AppLive = DatabaseLive.pipe(Layer.provide(ConfigLive))."
       ],
-      explanation: `\`DatabaseLive\` has type \`Layer<Database, never, Config>\`: it provides \`Database\` but *requires* \`Config\`. When you \`Effect.provide\` it, the unmet requirement moves onto the program, so \`runSync\` sees \`R = Config\` and refuses. \`Layer.provide(ConfigLive)\` satisfies it inside the graph, giving \`Layer<Database, never, never>\`. A requirement can move up the graph but never disappears on its own, which is exactly how the compiler finds the missing edge.`
+      explanation: `\`DatabaseLive\` has the type \`Layer<Database, never, Config>\`. It provides \`Database\` but *requires* \`Config\`. When you \`Effect.provide\` it, the unsatisfied requirement moves to the program. \`runSync\` sees \`R = Config\` and rejects it. \`Layer.provide(ConfigLive)\` satisfies the requirement inside the graph and gives \`Layer<Database, never, never>\`. A requirement can move up the graph, but it never disappears on its own. This is how the compiler finds the missing edge.`
     },
     {
       id: "requirements-management-c4",
       title: "Hidden by provide",
-      task: `\`program\` needs both \`UserRepo\` and \`Config\`, but the graph exposes only \`UserRepo\`, so it does not compile. Change one layer function so both are exposed and the program prints the two lines below.`,
+      task: `\`program\` needs both \`UserRepo\` and \`Config\`, but the graph exposes only \`UserRepo\`, so it does not compile. Change 1 layer function so that the graph exposes both, and the program prints the 2 lines below.`,
       code: `import { Context, Effect, Layer } from "effect"
 
 class Config extends Context.Service<Config, { readonly env: string }>()("Config") {}
@@ -583,16 +627,16 @@ Effect.runSync(program.pipe(Effect.provide(AppLive)))
       expectedOutput: `user 7 from staging
 running in staging`,
       hints: [
-        "Config was provided to UserRepoLive, but the program itself also asks for Config. Where did it go?",
-        "Lesson 4's table: one function feeds a layer and hides the dependency, another feeds it and keeps it visible.",
+        "Config was provided to UserRepoLive, but the program also asks for Config. Where did Config go?",
+        "See the table in lesson 4: one function provides a layer and hides the dependency, another provides it and keeps it visible.",
         "Use Layer.provideMerge(ConfigLive) instead of Layer.provide(ConfigLive)."
       ],
-      explanation: `\`Layer.provide\` is deliberately private: it uses \`ConfigLive\` to build \`UserRepoLive\` and then exposes only \`UserRepo\`. Downstream code cannot reach \`Config\`. \`Layer.provideMerge\` does the same wiring but exposes both, giving \`Layer<UserRepo | Config, never, never>\`. Both are useful: \`provide\` for internal details like a database URL, \`provideMerge\` when the dependency is also part of the public surface.`
+      explanation: `\`Layer.provide\` hides the dependency on purpose. It uses \`ConfigLive\` to build \`UserRepoLive\`, and then exposes only \`UserRepo\`. Code that uses the graph cannot get \`Config\`. \`Layer.provideMerge\` makes the same connection but exposes both. The result is \`Layer<UserRepo | Config, never, never>\`. Both functions are useful. Use \`provide\` for internal details, for example a database URL. Use \`provideMerge\` when the dependency is also part of the public interface.`
     },
     {
       id: "requirements-management-c5",
       title: "Built twice",
-      task: `\`Config\` is expensive to build, and this program builds it twice. Restructure the program so it prints \`building Config\` exactly once, followed by the two \`uses\` lines in the same order.`,
+      task: `\`Config\` is expensive to build, and this program builds it 2 times. Change the structure of the program so that it prints \`building Config\` exactly once, then the 2 \`uses\` lines in the same order.`,
       code: `import { Context, Effect, Layer } from "effect"
 
 class Config extends Context.Service<Config, { readonly appName: string }>()("Config") {}
@@ -649,16 +693,16 @@ Effect.runSync(program)
 A uses shop
 B uses shop`,
       hints: [
-        "Each Effect.provide builds its own graph, and that graph is torn down when the provided effect finishes.",
-        "Lesson 6's rule: compose first, provide once. Let stepA and stepB keep Config in their R.",
-        "Remove both inner provides and add .pipe(Effect.provide(ConfigLive)) to the outer Effect.gen."
+        "Each Effect.provide builds its own graph. Effect releases that graph when the provided effect finishes.",
+        "The rule from lesson 6: combine first, provide once. Let stepA and stepB keep Config in their R.",
+        "Remove both inner provides, and add .pipe(Effect.provide(ConfigLive)) to the outer Effect.gen."
       ],
-      explanation: `Memoization is per graph. Each inner \`Effect.provide\` created a small graph, built \`Config\`, ran its step, and released the graph. The second call had nothing to reuse. Leaving \`Config\` in the \`R\` of \`stepA\` and \`stepB\` and providing once at the outer level puts both steps inside one graph, so the layer is built a single time. This is also the more honest type: \`program\` now says it needs \`Config\` until the very edge.`
+      explanation: `Memoization applies to 1 graph. Each inner \`Effect.provide\` made a small graph, built \`Config\`, ran its step, and released the graph. The second call had nothing to reuse. Keep \`Config\` in the \`R\` of \`stepA\` and \`stepB\`, and provide once at the outer level. Then both steps are in 1 graph, and Effect builds the layer 1 time. The type is also more accurate: \`program\` now says that it needs \`Config\` until the top.`
     },
     {
       id: "requirements-management-c6",
-      title: "It should have a default",
-      task: `\`Settings\` is meant to be optional: the program should run without providing it and print \`verbose: false\`, then run again with an override and print \`verbose: true\`. Right now it does not compile. Change how \`Settings\` is declared. Do not touch \`program\` or the two \`runSync\` lines.`,
+      title: "It must have a default",
+      task: `\`Settings\` must be optional. The program must run without it and print \`verbose: false\`. Then it must run again with an override and print \`verbose: true\`. Now it does not compile. Change how \`Settings\` is declared. Do not change \`program\` or the 2 \`runSync\` lines.`,
       code: `import { Context, Effect } from "effect"
 
 interface Settings {
@@ -697,10 +741,10 @@ Effect.runSync(program.pipe(Effect.provideService(Settings, { verbose: true })))
 verbose: true`,
       hints: [
         "The first runSync fails because Settings is a hard requirement. Which kind of service never appears in R?",
-        "Lesson 2's table has a form with a defaultValue.",
+        "The table in lesson 2 has a form with a defaultValue.",
         "Context.Reference<Settings>(\"Settings\", { defaultValue: () => ({ verbose: false }) })."
       ],
-      explanation: `\`Context.Service\` declares a requirement: it must be provided or the program does not type check. \`Context.Reference\` declares a service **with a default**, so reading it adds nothing to \`R\`. The first run uses the default; the second overrides it with \`provideService\`, which works on References exactly as on Services. Use a Reference for config and flags that have a sane default, and a Service for anything the program cannot work without.`
+      explanation: `\`Context.Service\` declares a requirement. You must provide it, or the program does not type check. \`Context.Reference\` declares a service **with a default**, so a read adds nothing to \`R\`. The first run uses the default. The second run overrides it with \`provideService\`, which works on References exactly as on Services. Use a Reference for config and flags that have a good default. Use a Service for anything that the program cannot work without.`
     }
   ],
   problems: [
@@ -708,13 +752,13 @@ verbose: true`,
       id: "requirements-management-p1",
       title: "Order pipeline with three services",
       spec: `
-Build \`placeOrder(sku, qty)\` on top of three services, then wire them with layers.
+Build \`placeOrder(sku, qty)\` on top of 3 services, then connect them with layers.
 
 1. \`Pricing\` has \`price(sku): number\`. Prices: \`book\` is 15, \`pen\` is 2.
 2. \`Inventory\` has \`reserve(sku, qty): Effect<void>\`. It prints \`reserved <qty> x <sku>\`.
 3. \`Notifier\` has \`notify(message): Effect<void>\`. It prints \`notify: <message>\`.
 
-\`placeOrder\` reserves stock, computes \`total = price * qty\`, prints \`total <total>\`, and notifies with the message \`order <sku> x<qty> = <total>\`. Build one layer per service with \`Layer.succeed\`, combine them with \`Layer.mergeAll\`, and run \`placeOrder("book", 2)\` then \`placeOrder("pen", 5)\` with a single \`Effect.provide\`. Exact output:
+\`placeOrder\` reserves stock, computes \`total = price * qty\`, prints \`total <total>\`, and notifies with the message \`order <sku> x<qty> = <total>\`. Build 1 layer for each service with \`Layer.succeed\`. Combine them with \`Layer.mergeAll\`. Run \`placeOrder("book", 2)\` and then \`placeOrder("pen", 5)\` with 1 \`Effect.provide\`. Exact output:
 
 \`\`\`
 reserved 2 x book
@@ -803,9 +847,9 @@ reserved 5 x pen
 total 10
 notify: order pen x5 = 10`,
       hints: [
-        "Inside placeOrder, yield* each of the three tags first, then use them. R becomes the union of all three.",
-        "Layer.succeed(Tag, { ... }) takes a plain object matching the shape. Parameter types are inferred from the tag.",
-        "Layer.mergeAll(a, b, c) produces one Layer<Pricing | Inventory | Notifier>; provide it once at the end."
+        "Inside placeOrder, yield* each of the 3 tags first, then use them. R becomes the union of all 3.",
+        "Layer.succeed(Tag, { ... }) takes a plain object that matches the shape. The parameter types are inferred from the tag.",
+        "Layer.mergeAll(a, b, c) makes 1 Layer<Pricing | Inventory | Notifier>. Provide it once at the end."
       ]
     },
     {
@@ -814,12 +858,12 @@ notify: order pen x5 = 10`,
       spec: `
 \`checkout(amount)\` charges a card and prints the receipt id. It must not know which gateway it uses.
 
-1. Define a \`Payments\` service with \`charge(amount): Effect<string>\` that returns a receipt id.
+1. Define a \`Payments\` service with \`charge(amount): Effect<string>\`. \`charge\` returns a receipt id.
 2. \`PaymentsLive\` prints \`stripe: charging <amount>\` and returns \`"stripe-<amount>"\`.
-3. \`PaymentsFake\` pushes the amount into a module-level \`charges: Array<number>\` and returns \`"fake-<amount>"\`. It prints nothing.
+3. \`PaymentsFake\` adds the amount to a module-level \`charges: Array<number>\` and returns \`"fake-<amount>"\`. It prints nothing.
 4. \`checkout(amount)\` calls \`charge\` and prints \`receipt <id>\`.
 
-Run \`checkout(42)\` with the live layer, then \`checkout(42)\` and \`checkout(7)\` with the fake layer, then print \`fake charges: <amounts joined by ", ">\`. Exact output:
+Run \`checkout(42)\` with the live layer. Then run \`checkout(42)\` and \`checkout(7)\` with the fake layer. Then print \`fake charges: <amounts joined by ", ">\`. Exact output:
 
 \`\`\`
 stripe: charging 42
@@ -890,21 +934,21 @@ fake charges: 42, 7`,
       hints: [
         "The shape is { readonly charge: (amount: number) => Effect.Effect<string> }. Both layers must match it exactly.",
         "Effect.sync can print and return a value in the same function body.",
-        "Group the two fake checkouts in one Effect.gen and provide PaymentsFake once."
+        "Put the 2 fake checkouts in 1 Effect.gen and provide PaymentsFake once."
       ]
     },
     {
       id: "requirements-management-p3",
       title: "A three-level graph",
       spec: `
-Wire a chain \`Config -> Database -> UserRepo\` and expose the right services at the top.
+Connect a chain \`Config -> Database -> UserRepo\` and expose the correct services at the top.
 
 1. \`Config\` holds \`{ env: string, dbUrl: string }\`. \`ConfigLive\` provides \`{ env: "prod", dbUrl: "postgres://prod" }\` with \`Layer.succeed\`.
-2. \`Database\` has \`query(sql): Effect<Array<string>>\`. \`DatabaseLive\` is a \`Layer.effect\` that reads \`Config\`, prints \`connecting to <dbUrl>\` once while building, and answers every query with \`["Ada", "Lin"]\`.
+2. \`Database\` has \`query(sql): Effect<Array<string>>\`. \`DatabaseLive\` is a \`Layer.effect\`. It reads \`Config\`, prints \`connecting to <dbUrl>\` once when it builds, and answers every query with \`["Ada", "Lin"]\`.
 3. \`UserRepo\` has \`name(id): Effect<string>\`. \`UserRepoLive\` reads \`Database\`, queries \`"select name from users"\`, and returns the row at index \`id - 1\`.
-4. \`AppLive\` must have the type \`Layer.Layer<UserRepo | Config>\`: it exposes \`UserRepo\` and \`Config\` but hides \`Database\`. Annotate it with that type so the compiler checks it.
+4. \`AppLive\` must have the type \`Layer.Layer<UserRepo | Config>\`. It exposes \`UserRepo\` and \`Config\` but hides \`Database\`. Annotate it with that type so that the compiler checks it.
 
-\`program\` prints \`user 1 is <name>\`, \`user 2 is <name>\`, then \`env: <env>\` read from \`Config\`. Exact output:
+\`program\` prints \`user 1 is <name>\`, \`user 2 is <name>\`, then \`env: <env>\` from \`Config\`. Exact output:
 
 \`\`\`
 connecting to postgres://prod
@@ -995,40 +1039,40 @@ user 1 is Ada
 user 2 is Lin
 env: prod`,
       hints: [
-        "Build bottom-up: DatabaseLive needs Config, UserRepoLive needs Database. Hover each layer to read its third type parameter.",
-        "Layer.provide hides what it feeds in, Layer.provideMerge keeps it visible. You need one of each.",
-        "UserRepoLive.pipe(Layer.provide(DatabaseLive), Layer.provideMerge(ConfigLive)). After the first provide the layer still needs Config; the second one supplies it and exposes it."
+        "Build from the bottom up: DatabaseLive needs Config, UserRepoLive needs Database. Hover over each layer to read its third type parameter.",
+        "Layer.provide hides the layer that it provides. Layer.provideMerge keeps it visible. You need 1 of each.",
+        "UserRepoLive.pipe(Layer.provide(DatabaseLive), Layer.provideMerge(ConfigLive)). After the first provide, the layer still needs Config. The second provide satisfies it and exposes it."
       ]
     }
   ],
   recall: [
     {
       q: "What does `R = never` at the top of a program guarantee?",
-      a: "Every service the program reads has been provided. `runSync` and `runPromise` only accept `R = never`, so a missing dependency is a compile error at the run call, not a runtime crash."
+      a: "Every service that the program reads is provided. `runSync` and `runPromise` accept only `R = never`. A missing dependency is a compile error at the run call, not a runtime crash."
     },
     {
-      q: "What would the type of `Effect.gen(function* () { const db = yield* Database; return yield* db.query(\"x\") })` be, if `query` returns `Effect<string>`?",
-      a: "`Effect<string, never, Database>`. The `yield* Database` added `Database` to `R`; the success type comes from `query`."
+      q: "What is the type of `Effect.gen(function* () { const db = yield* Database; return yield* db.query(\"x\") })`, if `query` returns `Effect<string>`?",
+      a: "`Effect<string, never, Database>`. The `yield* Database` added `Database` to `R`. The success type comes from `query`."
     },
     {
-      q: "Which function would you reach for to satisfy a single requirement with a value you already have, and which one to plug in a whole graph of services?",
-      a: "`Effect.provideService(Tag, impl)` for a one-off value. `Effect.provide(layer)` for a Layer or a composed graph of Layers."
+      q: "Which function satisfies 1 requirement with a value that you already have? Which function provides a whole graph of services?",
+      a: "`Effect.provideService(Tag, impl)` for 1 value. `Effect.provide(layer)` for a layer or a combined graph of layers."
     },
     {
       q: "What is the difference between `Layer.provide` and `Layer.provideMerge`?",
-      a: "Both feed one layer into another. `provide` exposes only the receiving layer's service, hiding the dependency. `provideMerge` exposes both. Use `provide` for internal details, `provideMerge` when downstream code also needs the dependency."
+      a: "Both provide one layer to another. `provide` exposes only the service of the layer that receives, and hides the dependency. `provideMerge` exposes both. Use `provide` for internal details. Use `provideMerge` when code that uses the graph also needs the dependency."
     },
     {
-      q: "When do you use `Layer.succeed` versus `Layer.effect`?",
-      a: "`Layer.succeed(Tag, impl)` when the implementation is a plain value with no setup. `Layer.effect(Tag, effect)` when building it is work: reading config, opening a connection, or depending on other services via `yield*`."
+      q: "When do you use `Layer.succeed`, and when do you use `Layer.effect`?",
+      a: "Use `Layer.succeed(Tag, impl)` when the implementation is a plain value with no setup. Use `Layer.effect(Tag, effect)` when the build is work: read config, open a connection, or get other services with `yield*`."
     },
     {
-      q: "Two layers in the same graph both depend on `ConfigLive`. How many times is it built, and how would you force a second build?",
-      a: "Once. Layers are memoized by identity within a graph. Wrap one occurrence in `Layer.fresh(ConfigLive)` to force a separate build, for example to isolate a test."
+      q: "2 layers in the same graph both depend on `ConfigLive`. How many times is it built? How do you force a second build?",
+      a: "Once. Effect memoizes layers by identity in 1 graph. Wrap 1 occurrence in `Layer.fresh(ConfigLive)` to force a separate build, for example to isolate a test."
     },
     {
-      q: "When is `Context.Reference` the right choice instead of `Context.Service`?",
-      a: "When the service has a sensible default, like a log level or a feature flag. A Reference never appears in `R`, so the program runs without providing it, and `provideService` can still override it."
+      q: "When is `Context.Reference` the correct choice instead of `Context.Service`?",
+      a: "When the service has a good default, for example a log level or a feature flag. A Reference never appears in `R`. The program runs without it, and `provideService` can still override it."
     }
   ]
 }
