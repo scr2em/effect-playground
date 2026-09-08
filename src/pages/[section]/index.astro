@@ -1,0 +1,70 @@
+---
+import { loadSections } from "../../components/sections.ts"
+import type { Section } from "../../../content/types.ts"
+import Base from "../../layouts/Base.astro"
+import Anchor from "../../components/Anchor.astro"
+import Markdown from "../../components/Markdown.astro"
+import SectionIntro from "../../components/SectionIntro.astro"
+import LessonCard from "../../components/LessonCard.astro"
+import DoDontTable from "../../components/DoDontTable.astro"
+import ChallengeCard from "../../components/ChallengeCard.astro"
+import ProblemCard from "../../components/ProblemCard.astro"
+import RecallList from "../../components/RecallList.astro"
+import * as stylex from "@stylexjs/stylex"
+import { layout } from "../../styles/layout.stylex"
+import { heading } from "../../styles/anchor.stylex"
+
+export async function getStaticPaths() {
+  const sections = loadSections()
+  return sections.map((section, i) => ({
+    params: { section: section.id },
+    props: { section, sections, prev: sections[i - 1] ?? null, next: sections[i + 1] ?? null }
+  }))
+}
+
+interface Props { section: Section; sections: Array<Section>; prev: Section | null; next: Section | null }
+const { section: s, sections, prev, next } = Astro.props
+const base = import.meta.env.BASE_URL.replace(/\/$/, "")
+---
+<Base title={s.title} sections={sections} current={s.id}>
+  <SectionIntro section={s} />
+
+  {s.lessons.length > 0 && <h2 {...stylex.props(layout.part, heading)} id="learn">Learn <Anchor id="learn" /></h2>}
+  {s.lessons.map((l, i) => <LessonCard lesson={l} index={i} />)}
+
+  {s.dosAndDonts?.length > 0 && (
+    <>
+      <h2 {...stylex.props(layout.part, heading)} id="do-dont">Do and don't <Anchor id="do-dont" /></h2>
+      <DoDontTable rows={s.dosAndDonts} />
+    </>
+  )}
+
+  {s.challenges.length > 0 && (
+    <>
+      <h2 {...stylex.props(layout.part, heading)} id="fix-it">Fix it <Anchor id="fix-it" /></h2>
+      <Markdown content="Each program below is broken or incomplete. Make it print the expected output with zero type errors. Use hints before the solution." />
+    </>
+  )}
+  {s.challenges.map((c, i) => <ChallengeCard challenge={c} index={i} />)}
+
+  {s.problems.length > 0 && (
+    <>
+      <h2 {...stylex.props(layout.part, heading)} id="build-it">Build it <Anchor id="build-it" /></h2>
+      <Markdown content="Write the program from the spec. The output must match exactly." />
+    </>
+  )}
+  {s.problems.map((p, i) => <ProblemCard problem={p} index={i} />)}
+
+  {s.recall.length > 0 && (
+    <>
+      <h2 {...stylex.props(layout.part, heading)} id="recall">Recall <Anchor id="recall" /></h2>
+      <Markdown content="Answer in your head first, then reveal. Come back to these tomorrow." />
+      <RecallList items={s.recall} />
+    </>
+  )}
+
+  <div {...stylex.props(layout.nextNav)}>
+    {prev ? <a href={`${base}/${prev.id}/`} rel="prev" {...stylex.props(layout.nextLink)}>← {prev.title}</a> : <span />}
+    {next ? <a href={`${base}/${next.id}/`} rel="next" {...stylex.props(layout.nextLink)}>{next.title} →</a> : <span />}
+  </div>
+</Base>

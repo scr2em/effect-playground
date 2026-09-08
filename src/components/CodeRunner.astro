@@ -1,0 +1,27 @@
+---
+/**
+ * Renders the React island (src/client/CodeRunner.tsx). Markdown/code that needs build-time
+ * rendering (shiki, marked) is passed in as HTML strings.
+ */
+import { highlightCode, renderMarkdown } from "./markdown.ts"
+import CodeRunnerIsland from "../client/CodeRunner.tsx"
+
+interface Props {
+  id: string
+  kind: "lesson" | "challenge" | "problem" | "scratch"
+  code: string
+  solution?: string
+  expected?: string
+  hints?: Array<string>
+  explanation?: string
+  tall?: boolean
+}
+const { id, kind, code, solution, expected, hints = [], explanation, tall = false } = Astro.props
+
+const fallbackHtml = await highlightCode(code)
+const solutionHtml = solution ? await highlightCode(solution) : undefined
+const explanationHtml = explanation ? await renderMarkdown(explanation) : undefined
+---
+<CodeRunnerIsland client:visible id={id} kind={kind} code={code} fallbackHtml={fallbackHtml}
+  solution={solution} solutionHtml={solutionHtml} expected={expected} hints={hints}
+  explanationHtml={explanationHtml} tall={tall} />

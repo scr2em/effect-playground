@@ -379,12 +379,8 @@ Effect.runPromise(program)
       expectedOutput: `zipWith [ "1. ada", "2. lin", "3. bo" ]
 merge [ "A1", "A2", "B1" ]
 flatMap [ "ada", "ADA", "lin", "LIN" ]
-grouped [
-  [ 1, 2, 3 ], [ 4, 5, 6 ], [ 7 ]
-]
-zip stops at the shorter [
-  [ "ada", true ], [ "lin", false ]
-]`,
+grouped [ [ 1, 2, 3 ], [ 4, 5, 6 ], [ 7 ] ]
+zip stops at the shorter [ [ "ada", true ], [ "lin", false ] ]`,
       after: `\`zipWith\` with the infinite \`Stream.iterate(1, ...)\` is safe. \`zip\` stops when \`names\` ends, so it pulls only 3 elements from the infinite side. \`Stream.zipWithIndex\` does the same and adds the index for you.`
     },
     {

@@ -1,0 +1,20 @@
+---
+import * as stylex from "@stylexjs/stylex"
+import type { Lesson } from "../../content/types.ts"
+import Anchor from "./Anchor.astro"
+import Markdown from "./Markdown.astro"
+import CodeRunner from "./CodeRunner.astro"
+import { card } from "../styles/card.stylex"
+import { heading } from "../styles/anchor.stylex"
+
+interface Props { lesson: Lesson; index: number }
+const { lesson, index } = Astro.props
+---
+<div id={lesson.id} data-card={lesson.id} {...stylex.props(card.item)}>
+  <div {...stylex.props(card.itemHead)}><h3 {...stylex.props(card.h3, heading)}>Lesson {index + 1}. {lesson.title} <Anchor id={lesson.id} /></h3></div>
+  <Markdown content={lesson.explain} />
+  <CodeRunner id={lesson.id} kind="lesson" code={lesson.code} />
+  {lesson.after && (
+    <div {...stylex.props(card.reveal)}><div {...stylex.props(card.label)}>Notice</div><Markdown content={lesson.after} /></div>
+  )}
+</div>

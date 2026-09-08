@@ -1,0 +1,17 @@
+---
+import * as stylex from "@stylexjs/stylex"
+import type { Recall } from "../../content/types.ts"
+import Anchor from "./Anchor.astro"
+import Markdown from "./Markdown.astro"
+import { card, recallDetails } from "../styles/card.stylex"
+import { heading } from "../styles/anchor.stylex"
+
+interface Props { items: Array<Recall> }
+const { items } = Astro.props
+---
+{items.map((r, i) => (
+  <details id={`recall-${i + 1}`} data-recall {...stylex.props(card.recall, recallDetails)}>
+    <summary {...stylex.props(card.recallSummary, heading)}>{r.q} <Anchor id={`recall-${i + 1}`} /></summary>
+    <Markdown content={r.a} class={stylex.props(card.recallBody).className} />
+  </details>
+))}

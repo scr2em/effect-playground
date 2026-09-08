@@ -1,0 +1,3 @@
+/* Minimal reset. Everything else is StyleX (src/styles/*.stylex.ts) or src/styles/markdown-css.ts. */
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }

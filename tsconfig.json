@@ -1,16 +1,31 @@
 {
+  "extends": "astro/tsconfigs/strict",
   "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "lib": ["ES2022", "DOM"],
-    "strict": true,
-    "exactOptionalPropertyTypes": true,
-    "noEmit": true,
-    "skipLibCheck": true,
     "allowImportingTsExtensions": true,
-    "types": ["bun-types"]
+    "noEmit": true,
+    "exactOptionalPropertyTypes": true,
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable",
+      "WebWorker"
+    ],
+    "jsx": "react-jsx",
+    "jsxImportSource": "react",
+    "types": []
   },
-  "include": ["**/*.ts"],
-  "exclude": ["node_modules", "runner"]
+  "include": [
+    "src/**/*",
+    "content/**/*",
+    "scripts/**/*",
+    "lib/**/*",
+    "tests/**/*",
+    ".astro/types.d.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "runner",
+    "legacy"
+  ]
 }

@@ -1,0 +1,14 @@
+---
+/**
+ * The "#" link next to every heading. Clicking copies the absolute URL to the clipboard
+ * (client behavior in src/client/app.ts). Without an id it links to the page itself.
+ * The heading must carry {...stylex.props(heading)} so the link shows on hover.
+ */
+import * as stylex from "@stylexjs/stylex"
+import { anchor } from "../styles/anchor.stylex"
+
+interface Props { id?: string }
+const { id } = Astro.props
+const href = id ? `#${id}` : Astro.url.pathname
+---
+<a href={href} title="Copy link to this" data-anchor {...stylex.props(anchor.link)}>#</a>

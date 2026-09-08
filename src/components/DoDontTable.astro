@@ -1,0 +1,27 @@
+---
+import * as stylex from "@stylexjs/stylex"
+import type { DoDont } from "../../content/types.ts"
+import Markdown from "./Markdown.astro"
+import { dodont } from "../styles/dodont.stylex"
+
+interface Props { rows: Array<DoDont> }
+const { rows } = Astro.props
+---
+<div class="md">
+  <table {...stylex.props(dodont.table)}>
+    <thead><tr>
+      <th {...stylex.props(dodont.cell, dodont.head)}>Do</th>
+      <th {...stylex.props(dodont.cell, dodont.head)}>Don't</th>
+      <th {...stylex.props(dodont.cell, dodont.head)}>Why</th>
+    </tr></thead>
+    <tbody>
+      {rows.map((d) => (
+        <tr>
+          <td {...stylex.props(dodont.cell, dodont.do)}><Markdown content={d.do} inline /></td>
+          <td {...stylex.props(dodont.cell, dodont.dont)}><Markdown content={d.dont} inline /></td>
+          <td {...stylex.props(dodont.cell)}><Markdown content={d.why} inline /></td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+</div>

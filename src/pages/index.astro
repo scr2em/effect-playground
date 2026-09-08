@@ -1,0 +1,20 @@
+---
+import { loadSections } from "../components/sections.ts"
+
+const sections = loadSections()
+const base = import.meta.env.BASE_URL.replace(/\/$/, "")
+const target = `${base}/${sections[0]!.id}/`
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="refresh" content={`0;url=${target}`} />
+    <link rel="canonical" href={target} />
+    <title>Effect Playground</title>
+    <meta name="color-scheme" content="dark" />
+  </head>
+  <body style="background:#0f1115;color:#e6e8ee;font-family:sans-serif;padding:32px">
+    <p>Redirecting to <a href={target} style="color:#7c9cff">{sections[0]!.title}</a>…</p>
+  </body>
+</html>

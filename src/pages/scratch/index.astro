@@ -1,0 +1,26 @@
+---
+import { loadSections } from "../../components/sections.ts"
+import Base from "../../layouts/Base.astro"
+import CodeRunner from "../../components/CodeRunner.astro"
+import * as stylex from "@stylexjs/stylex"
+import { layout } from "../../styles/layout.stylex"
+import { card } from "../../styles/card.stylex"
+
+const sections = loadSections()
+const code = `import { Effect } from "effect"
+
+const program = Effect.gen(function* () {
+  const n = yield* Effect.succeed(41)
+  console.log(n + 1)
+})
+
+Effect.runPromise(program)
+`
+---
+<Base title="Scratchpad" sections={sections} current="scratch">
+  <h1 {...stylex.props(layout.h1)}>Scratchpad</h1>
+  <p {...stylex.props(layout.summary)}>Try anything. Same type checker and runtime as the lessons.</p>
+  <div {...stylex.props(card.item)}>
+    <CodeRunner id="scratch" kind="scratch" code={code} tall />
+  </div>
+</Base>

@@ -1,0 +1,120 @@
+import * as stylex from "@stylexjs/stylex"
+import { colors, fonts, radii } from "./tokens.stylex"
+
+export const runner = stylex.create({
+  root: { display: "block" },
+  editor: {
+    height: 300,
+    minHeight: 120,
+    maxHeight: "90vh",
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: colors.border,
+    borderRadius: radii.lg,
+    overflow: "hidden",
+    margin: "10px 0",
+    resize: "vertical",
+    position: "relative",
+    backgroundColor: colors.codeBg,
+    "::after": {
+      content: '""',
+      position: "absolute",
+      right: 4,
+      bottom: 4,
+      width: 10,
+      height: 10,
+      borderRightWidth: 2,
+      borderRightStyle: "solid",
+      borderRightColor: colors.muted,
+      borderBottomWidth: 2,
+      borderBottomStyle: "solid",
+      borderBottomColor: colors.muted,
+      opacity: .6,
+      pointerEvents: "none"
+    }
+  },
+  editorTall: { height: 420 },
+  /** Fills the editor box; the runtime's createEditor() mounts into it. */
+  mount: { position: "absolute", inset: 0 },
+  /** Wraps the server-rendered shiki <pre> until the editor mounts. */
+  fallback: { position: "absolute", inset: 0, overflow: "auto" },
+  toolbar: { display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", margin: "8px 0" },
+  spacer: { flex: 1 },
+  btn: {
+    backgroundColor: colors.panel2,
+    color: colors.text,
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: { default: colors.border, ":hover": colors.accent },
+    borderRadius: radii.md,
+    padding: "6px 12px",
+    cursor: { default: "pointer", ":disabled": "default" },
+    fontSize: 13,
+    fontFamily: fonts.sans,
+    opacity: { default: 1, ":disabled": .5 }
+  },
+  btnPrimary: { backgroundColor: colors.accent, color: colors.codeBg, borderColor: colors.accent, fontWeight: 600 },
+  btnGhost: { backgroundColor: "transparent" },
+  hintText: { fontSize: 13, color: colors.muted },
+  kbd: {
+    fontFamily: fonts.mono,
+    fontSize: 11,
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: colors.border,
+    borderRadius: radii.sm,
+    padding: "0 5px",
+    color: colors.muted
+  },
+  output: {
+    fontFamily: fonts.mono,
+    fontSize: 13,
+    backgroundColor: colors.codeBg,
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderColor: colors.border,
+    borderRadius: radii.lg,
+    padding: "10px 12px",
+    whiteSpace: "pre-wrap",
+    marginTop: 8,
+    minHeight: 40,
+    maxHeight: 320,
+    overflow: "auto",
+    color: colors.text
+  },
+  outputEmpty: { color: colors.muted },
+  diag: { color: colors.danger },
+  stderr: { color: colors.warn },
+  meta: { color: colors.muted },
+  pass: { color: colors.ok, fontWeight: 600 },
+  fail: { color: colors.danger, fontWeight: 600 },
+  /** textarea-based stub editor (src/runtime/editor.stub.ts) */
+  stubEditor: {
+    width: "100%",
+    height: "100%",
+    margin: 0,
+    padding: "10px 12px",
+    borderStyle: "none",
+    outline: "none",
+    resize: "none",
+    backgroundColor: colors.codeBg,
+    color: colors.text,
+    fontFamily: fonts.mono,
+    fontSize: 13,
+    lineHeight: 1.5,
+    tabSize: 2
+  },
+  stubDiags: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    bottom: 0,
+    maxHeight: "40%",
+    overflow: "auto",
+    backgroundColor: "rgba(255,123,123,.12)",
+    color: colors.danger,
+    fontFamily: fonts.mono,
+    fontSize: 12,
+    padding: "4px 8px"
+  }
+})

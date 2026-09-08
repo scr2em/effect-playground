@@ -1,0 +1,14 @@
+---
+import * as stylex from "@stylexjs/stylex"
+import type { Section } from "../../content/types.ts"
+import Anchor from "./Anchor.astro"
+import Markdown from "./Markdown.astro"
+import { layout } from "../styles/layout.stylex"
+import { heading } from "../styles/anchor.stylex"
+
+interface Props { section: Section }
+const { section } = Astro.props
+---
+<h1 {...stylex.props(layout.h1, heading)}>{section.title} <Anchor /></h1>
+<p {...stylex.props(layout.summary)}>{section.summary}</p>
+<Markdown content={section.intro} />

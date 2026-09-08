@@ -1,0 +1,21 @@
+---
+import * as stylex from "@stylexjs/stylex"
+import type { Challenge } from "../../content/types.ts"
+import Anchor from "./Anchor.astro"
+import Markdown from "./Markdown.astro"
+import CodeRunner from "./CodeRunner.astro"
+import { card } from "../styles/card.stylex"
+import { heading } from "../styles/anchor.stylex"
+
+interface Props { challenge: Challenge; index: number }
+const { challenge: ch, index } = Astro.props
+---
+<div id={ch.id} data-card={ch.id} data-checkable {...stylex.props(card.item)}>
+  <div {...stylex.props(card.itemHead)}>
+    <h3 {...stylex.props(card.h3, heading)}>{index + 1}. {ch.title} <Anchor id={ch.id} /></h3>
+    <span data-status {...stylex.props(card.status)}></span>
+  </div>
+  <Markdown content={ch.task} />
+  <div {...stylex.props(card.expected)}>expected output:{"\n"}{ch.expectedOutput}</div>
+  <CodeRunner id={ch.id} kind="challenge" code={ch.code} solution={ch.solution} expected={ch.expectedOutput} hints={ch.hints} explanation={ch.explanation} />
+</div>

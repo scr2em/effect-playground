@@ -1,0 +1,9 @@
+---
+/** Renders a markdown string at build time. `inline` renders without a wrapping block (for table cells). */
+import { renderMarkdown, renderInline } from "./markdown.ts"
+
+interface Props { content: string; inline?: boolean; class?: string }
+const { content, inline = false, class: cls } = Astro.props
+const html = inline ? renderInline(content) : await renderMarkdown(content)
+---
+{inline ? <Fragment set:html={html} /> : <div class:list={["md", cls]} set:html={html} />}

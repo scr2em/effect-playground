@@ -3,7 +3,8 @@
  *  - lessons: zero type errors, stdout === expectedOutput
  *  - challenges: solution passes; broken code must NOT pass (type error or different output)
  *  - problems: solution passes; starter must NOT pass
- * Usage: bun run scripts/verify.ts [sectionId ...]
+ * Usage: node --import tsx scripts/verify.ts [sectionId ...]   (npm run verify)
+ * Programs run with node + tsx + scripts/console-shim.ts (lib/run.ts).
  */
 import { check } from "../lib/run.ts"
 import { loadSections } from "../content/index.ts"

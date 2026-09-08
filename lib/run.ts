@@ -1,10 +1,18 @@
-import ts from "typescript"
+import ts from "typescript-js"
 import path from "node:path"
 import { mkdirSync, writeFileSync, rmSync } from "node:fs"
+import { spawn } from "node:child_process"
+import { randomUUID } from "node:crypto"
+import { fileURLToPath, pathToFileURL } from "node:url"
 
-export const ROOT = path.resolve(import.meta.dir, "..")
+export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const RUN_DIR = path.join(ROOT, "runner")
 mkdirSync(RUN_DIR, { recursive: true })
+
+// ---------- Learner files run with Node + tsx + the shared console formatter ----------
+const SHIM = pathToFileURL(path.join(ROOT, "scripts/console-shim.ts")).href
+export const RUNNER = [process.execPath, "--import", "tsx", "--import", SHIM]
+export const runnerName = "node + tsx"
 
 // ---------- Type checking: one persistent language service, one virtual file ----------
 const VIRTUAL = path.join(RUN_DIR, "playground.ts")
@@ -21,8 +29,7 @@ const compilerOptions: ts.CompilerOptions = {
   noEmit: true,
   skipLibCheck: true,
   allowImportingTsExtensions: true,
-  types: ["bun-types"],
-  typeRoots: [path.join(ROOT, "node_modules/@types")]
+  types: []
 }
 
 const host: ts.LanguageServiceHost = {
@@ -68,12 +75,13 @@ export function typecheck(code: string): Array<Diagnostic> {
       col: start.character + 1,
       endLine: end.line + 1,
       endCol: end.character + 1,
-      message: ts.flattenDiagnosticMessageText(d.messageText, "\n")
+      // paths in messages (typeof import("...")) are relative to the project, as in the browser
+      message: ts.flattenDiagnosticMessageText(d.messageText, "\n").replaceAll(ROOT, "")
     }
   })
 }
 
-// ---------- Execution: write a temp file, run with bun, kill after a timeout ----------
+// ---------- Running a TypeScript file in a child process ----------
 export interface RunResult {
   stdout: string
   stderr: string
@@ -82,34 +90,57 @@ export interface RunResult {
   durationMs: number
 }
 
-export async function execute(code: string, timeoutMs = 10_000): Promise<RunResult> {
-  const file = path.join(RUN_DIR, `run-${crypto.randomUUID()}.ts`)
-  writeFileSync(file, code)
-  const started = performance.now()
-  const proc = Bun.spawn(["bun", "run", file], {
-    cwd: ROOT,
-    stdout: "pipe",
-    stderr: "pipe",
-    env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" }
+export function runFile(file: string, timeoutMs: number): Promise<RunResult> {
+  return new Promise((resolve) => {
+    const started = performance.now()
+    // detached: the child leads its own process group, so a timeout can kill the whole
+    // tree (tsx runs user code in a grandchild process).
+    const proc = spawn(RUNNER[0]!, [...RUNNER.slice(1), file], {
+      cwd: ROOT,
+      env: { ...process.env, NO_COLOR: "1", FORCE_COLOR: "0" },
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32"
+    })
+    let stdout = ""
+    let stderr = ""
+    let timedOut = false
+    let done = false
+    proc.stdout.on("data", (d) => (stdout += d))
+    proc.stderr.on("data", (d) => (stderr += d))
+    const finish = (code: number | null) => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      resolve({ stdout, stderr, exitCode: code, timedOut, durationMs: Math.round(performance.now() - started) })
+    }
+    const killTree = () => {
+      try {
+        if (process.platform !== "win32" && proc.pid) process.kill(-proc.pid, "SIGKILL")
+        else proc.kill("SIGKILL")
+      } catch {}
+    }
+    const timer = setTimeout(() => {
+      timedOut = true
+      killTree()
+      // do not wait for orphaned pipes: report after a short grace period
+      setTimeout(() => finish(null), 200)
+    }, timeoutMs)
+    proc.on("exit", (code) => {
+      // give the stdio streams a tick to flush, then report
+      setImmediate(() => finish(code))
+    })
+    proc.on("error", () => finish(null))
   })
-  let timedOut = false
-  const timer = setTimeout(() => {
-    timedOut = true
-    proc.kill()
-  }, timeoutMs)
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited
-  ])
-  clearTimeout(timer)
-  rmSync(file, { force: true })
-  return {
-    stdout,
-    stderr: stderr.replaceAll(file, "playground.ts"),
-    exitCode,
-    timedOut,
-    durationMs: Math.round(performance.now() - started)
+}
+
+export async function execute(code: string, timeoutMs = 10_000): Promise<RunResult> {
+  const file = path.join(RUN_DIR, `run-${randomUUID()}.ts`)
+  writeFileSync(file, code)
+  try {
+    const r = await runFile(file, timeoutMs)
+    return { ...r, stderr: r.stderr.replaceAll(file, "playground.ts") }
+  } finally {
+    rmSync(file, { force: true })
   }
 }
 

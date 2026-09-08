@@ -152,16 +152,8 @@ const program = Effect.gen(function* () {
 
 Effect.runPromise(program)
 `,
-      expectedOutput: `{
-  min: 4,
-  max: 42,
-  mean: 18,
-}
-{
-  min: 1,
-  max: 1000,
-  mean: 500.5,
-}
+      expectedOutput: `{ min: 4, max: 42, mean: 18 }
+{ min: 1, max: 1000, mean: 500.5 }
 first total >= 10: 10`,
       after: `\`untilTen\` ran on a stream of 1 million numbers and stopped after 4 elements. A \`Sink.reduce\` reads all 1 million elements. Replace \`reduceWhile\` with \`reduce\` and remove the predicate. The result becomes the full sum.`
     },
