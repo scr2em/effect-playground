@@ -13,7 +13,8 @@
     "jsx": "react-jsx",
     "jsxImportSource": "react",
     "types": [
-      "node"
+      "node",
+      "astro/client"
     ]
   },
   "include": [
