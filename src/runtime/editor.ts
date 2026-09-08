@@ -107,11 +107,17 @@ export async function createEditor(container: HTMLElement, options: {
 }): Promise<EditorHandle> {
   const monaco = await loadMonaco()
   const model = monaco.editor.createModel(options.code, "typescript", monaco.Uri.parse(`inmemory://playground/${++counter}.ts`))
+  if (typeof document !== "undefined" && document.fonts?.ready) {
+    void document.fonts.ready.then(() => monaco.editor.remeasureFonts())
+  }
   const editor = monaco.editor.create(container, {
     model,
     theme: themeName(currentTheme),
     fontSize: 13,
-    fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+    // Monaco's default stack: Safari mis-measures some `ui-monospace` faces, which puts the caret
+    // in the wrong column on click. Menlo/Monaco are measured correctly in every browser.
+    fontFamily: "Menlo, Monaco, 'Courier New', monospace",
+    fontLigatures: false,
     minimap: { enabled: false },
     automaticLayout: true,
     readOnly: options.readOnly ?? false,

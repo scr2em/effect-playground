@@ -15,7 +15,6 @@ export const runner = stylex.create({
     margin: "10px 0",
     resize: "vertical",
     position: "relative",
-    contain: "layout",
     backgroundColor: colors.codeBg,
     "::after": {
       content: '""',
