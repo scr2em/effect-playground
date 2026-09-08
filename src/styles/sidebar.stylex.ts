@@ -65,5 +65,6 @@ export const sidebar = stylex.create({
     textDecoration: "none"
   },
   footLinkActive: { textDecoration: "underline" },
+  footTheme: { marginLeft: "auto", color: colors.muted },
   danger: { color: colors.danger }
 })

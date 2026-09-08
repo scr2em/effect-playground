@@ -15,6 +15,7 @@ export const runner = stylex.create({
     margin: "10px 0",
     resize: "vertical",
     position: "relative",
+    contain: "layout",
     backgroundColor: colors.codeBg,
     "::after": {
       content: '""',
@@ -35,7 +36,7 @@ export const runner = stylex.create({
   },
   editorTall: { height: 420 },
   /** Fills the editor box; the runtime's createEditor() mounts into it. */
-  mount: { position: "absolute", inset: 0 },
+  mount: { position: "absolute", inset: 0, overflow: "hidden" },
   /** Wraps the server-rendered shiki <pre> until the editor mounts. */
   fallback: { position: "absolute", inset: 0, overflow: "auto" },
   toolbar: { display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center", margin: "8px 0" },

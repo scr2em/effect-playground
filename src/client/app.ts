@@ -1,6 +1,6 @@
 /**
  * Page-level behavior outside the React island: sidebar progress badges, reset progress,
- * mobile sidebar toggle, card "done" state, and heading anchors (copy link + flash on load).
+ * mobile sidebar toggle, theme toggle, card "done" state, and heading anchors (copy link + flash on load).
  * Elements are server-rendered by the .astro templates; state changes recompute their StyleX class.
  */
 import * as stylex from "@stylexjs/stylex"
@@ -9,6 +9,7 @@ import { sidebar } from "../styles/sidebar.stylex"
 import { card } from "../styles/card.stylex"
 import { layout } from "../styles/layout.stylex"
 import { anchor } from "../styles/anchor.stylex"
+import { cycleMode, getStoredMode, initTheme, MODE_LABELS } from "./theme"
 
 const cls = (...styles: Array<stylex.StyleXStyles | false>) => stylex.props(...styles).className ?? ""
 
@@ -96,6 +97,16 @@ function setupSidebar(): void {
   renderBadges()
 }
 
+function setupTheme(): void {
+  initTheme()
+  const btn = document.getElementById("theme-toggle")
+  if (!btn) return
+  const label = () => { btn.textContent = MODE_LABELS[getStoredMode()] }
+  btn.addEventListener("click", () => { cycleMode(); label() })
+  label()
+}
+
 setupSidebar()
+setupTheme()
 applyCards()
 setupAnchors()

@@ -30,5 +30,6 @@ const base = import.meta.env.BASE_URL.replace(/\/$/, "")
   <div {...stylex.props(sidebar.foot)}>
     <a href={`${base}/scratch/`} {...stylex.props(sidebar.footLink, current === "scratch" && sidebar.footLinkActive)}>Scratchpad</a>
     <button type="button" id="reset-progress" {...stylex.props(sidebar.footLink, sidebar.danger)}>Reset progress</button>
+    <button type="button" id="theme-toggle" title="Color theme: System, Light or Dark" {...stylex.props(sidebar.footLink, sidebar.footTheme)}>◐ System</button>
   </div>
 </aside>

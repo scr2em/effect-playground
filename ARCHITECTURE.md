@@ -105,8 +105,10 @@ export function createEditor(container: HTMLElement, options: {
   readOnly?: boolean
 }): Promise<EditorHandle>
 ```
-Monaco is loaded from the `monaco-editor` npm package through Vite (no CDN). The theme is dark,
-background `#0b0d12`, font size 13, no minimap, `automaticLayout: true`. The editor shows
+Monaco is loaded from the `monaco-editor` npm package through Vite (no CDN). Two editor themes,
+dark (background `#0b0d12`) and light (`#f4f5f8`), follow the site theme (`html[data-theme]`, StyleX
+`createTheme` in `src/styles/themes.stylex.ts`, toggle in `src/client/theme.ts`). Font size 13, no minimap,
+`automaticLayout: true`, `alwaysConsumeMouseWheel: false` so the page scrolls past an editor at its end. The editor shows
 TypeScript syntax highlighting. Semantic diagnostics come from `setDiagnostics` (the runtime),
 not from Monaco's own worker, unless the Runtime owner decides Monaco's TS worker with
 `addExtraLib` IS the type checker; either way the UI only calls `setDiagnostics`.

@@ -5,6 +5,7 @@ import type { Section } from "../../content/types.ts"
 import Sidebar from "../components/Sidebar.astro"
 import { layout } from "../styles/layout.stylex"
 import { markdownCss } from "../styles/markdown-css"
+import { lightThemeClass, THEME_KEY, LIGHT_QUERY } from "../client/theme"
 
 interface Props { title: string; sections: Array<Section>; current?: string }
 const { title, sections, current } = Astro.props
@@ -15,7 +16,19 @@ const { title, sections, current } = Astro.props
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title} · Effect Playground</title>
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="dark light" />
+    {/* Theme before first paint: same rules as src/client/theme.ts (stored choice, else the OS preference). */}
+    <script is:inline define:vars={{ lightThemeClass, THEME_KEY, LIGHT_QUERY }}>
+      (function () {
+        var mode = null
+        try { mode = localStorage.getItem(THEME_KEY) } catch (e) {}
+        var theme = mode === "light" || mode === "dark" ? mode : (matchMedia(LIGHT_QUERY).matches ? "light" : "dark")
+        var root = document.documentElement
+        if (theme === "light") root.classList.add.apply(root.classList, lightThemeClass.split(" "))
+        root.dataset.theme = theme
+        root.style.colorScheme = theme
+      })()
+    </script>
     {import.meta.env.DEV && (
       <>
         {/* StyleX dev CSS endpoint + HMR shim (unplugin README); production links the emitted asset. */}

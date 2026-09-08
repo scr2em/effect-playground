@@ -4,8 +4,26 @@
  * Monaco's Monarch tokenizer (basic-languages); Monaco's own TypeScript worker is NOT loaded:
  * semantic diagnostics arrive through setDiagnostics from the runtime (client.ts). Monaco's
  * stylesheet is the ESM modules' own CSS imports, bundled by Vite; no hand-written CSS here.
+ * Theme: "playground" (dark) / "playground-light", following html[data-theme] and the
+ * `effect-playground:theme` event dispatched by src/client/theme.ts (setEditorTheme switches all editors).
  */
 import type { Diagnostic } from "./types.ts"
+
+export type EditorTheme = "light" | "dark"
+const THEME_EVENT = "effect-playground:theme"
+const themeName = (t: EditorTheme) => (t === "light" ? "playground-light" : "playground")
+let currentTheme: EditorTheme = typeof document !== "undefined" && document.documentElement.dataset.theme === "light" ? "light" : "dark"
+let loaded: Monaco | undefined
+
+/** Switches every editor on the page (Monaco themes are global). */
+export function setEditorTheme(theme: EditorTheme): void {
+  currentTheme = theme
+  loaded?.editor.setTheme(themeName(theme))
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener(THEME_EVENT, (e) => setEditorTheme((e as CustomEvent<string>).detail === "light" ? "light" : "dark"))
+}
 
 export interface EditorHandle {
   getValue(): string
@@ -53,6 +71,30 @@ function loadMonaco(): Promise<Monaco> {
         "scrollbarSlider.background": "#2a2f3a80"
       }
     })
+    // Light counterpart; background = the light `codeBg` token (src/styles/themes.stylex.ts).
+    monaco.editor.defineTheme("playground-light", {
+      base: "vs",
+      inherit: true,
+      rules: [
+        { token: "comment", foreground: "6b7280", fontStyle: "italic" },
+        { token: "keyword", foreground: "7c3aed" },
+        { token: "string", foreground: "15803d" },
+        { token: "number", foreground: "c2410c" },
+        { token: "type", foreground: "0e7490" },
+        { token: "identifier", foreground: "1b1f27" }
+      ],
+      colors: {
+        "editor.background": "#f4f5f8",
+        "editor.foreground": "#1b1f27",
+        "editor.lineHighlightBackground": "#e9ebf0",
+        "editorLineNumber.foreground": "#9aa1b1",
+        "editorGutter.background": "#f4f5f8",
+        "editor.selectionBackground": "#c7d2fe",
+        "editorIndentGuide.background": "#dfe2e8",
+        "scrollbarSlider.background": "#dcdfe6b0"
+      }
+    })
+    loaded = monaco
     return monaco
   })()
   return monacoPromise
@@ -67,18 +109,20 @@ export async function createEditor(container: HTMLElement, options: {
   const model = monaco.editor.createModel(options.code, "typescript", monaco.Uri.parse(`inmemory://playground/${++counter}.ts`))
   const editor = monaco.editor.create(container, {
     model,
-    theme: "playground",
+    theme: themeName(currentTheme),
     fontSize: 13,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
     minimap: { enabled: false },
     automaticLayout: true,
     readOnly: options.readOnly ?? false,
     scrollBeyondLastLine: false,
+    smoothScrolling: true,
     tabSize: 2,
     lineNumbersMinChars: 3,
     renderLineHighlight: "line",
     padding: { top: 8, bottom: 8 },
-    scrollbar: { alwaysConsumeMouseWheel: false }
+    // Let the wheel reach the page once the editor is scrolled to its start/end.
+    scrollbar: { alwaysConsumeMouseWheel: false, vertical: "auto", horizontal: "auto" }
   })
   if (options.onRun) {
     const onRun = options.onRun

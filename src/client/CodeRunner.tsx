@@ -64,18 +64,28 @@ export default function CodeRunner(props: CodeRunnerProps) {
     return promise
   }, [id, code])
 
-  // Mount the editor, restore the remembered height, and persist resizes.
+  // Mount the editor, restore the remembered height, and persist resizes. Monaco relayouts itself
+  // (automaticLayout), so this only stores the height: coalesced to one frame and skipped when it
+  // did not really change, so a resize never feeds back into another resize.
   useEffect(() => {
     const box = boxRef.current!
-    const saved = getHeight(id)
-    if (saved) box.style.height = `${saved}px`
+    let last = getHeight(id)
+    if (last) box.style.height = `${last}px`
+    let frame = 0
     const ro = new ResizeObserver(() => {
-      if (box.offsetHeight) { setHeight(id, box.offsetHeight); editorRef.current?.layout() }
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => {
+        const h = box.offsetHeight
+        if (!h || (last != null && Math.abs(h - last) <= 1)) return
+        last = h
+        setHeight(id, h)
+      })
     })
     ro.observe(box)
     void ensureEditor()
     return () => {
       ro.disconnect()
+      cancelAnimationFrame(frame)
       editorRef.current?.dispose()
       editorRef.current = null
       editorPromise.current = null

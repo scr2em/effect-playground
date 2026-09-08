@@ -19,5 +19,9 @@ export const markdownCss = `
 .md strong { color: ${colors.white}; }
 .md a { color: ${colors.accent}; }
 .md > :last-child { margin-bottom: 0; }
+/* shiki dual themes (markdown.ts, defaultColor: false): pick the token color for the active theme
+   (html[data-theme] is set by the inline script in Base.astro / src/client/theme.ts; no attribute = dark). */
+html:not([data-theme="light"]) .shiki, html:not([data-theme="light"]) .shiki span { color: var(--shiki-dark); }
+html[data-theme="light"] .shiki, html[data-theme="light"] .shiki span { color: var(--shiki-light); }
 [data-fallback] > pre.shiki { border: none; border-radius: 0; margin: 0; min-height: 100%; }
 `
