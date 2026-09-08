@@ -172,6 +172,146 @@ charged 114.99999999999999`,
       after: `\`tap\` did not change the value. It only read the value. If you replace \`tap\` with \`map\`, the pipeline carries \`undefined\` forward, because \`console.log\` returns nothing. This is the difference between the 2 functions.`
     },
     {
+      id: "getting-started-l7",
+      title: "Control flow: forEach, all, and when",
+      explain: `
+Real programs run one effect for each element of a list, or several effects together. In plain TypeScript you write a loop and \`Promise.all\`:
+
+\`\`\`ts
+const names = []
+for (const id of [1, 2, 3]) names.push(await loadName(id))
+const [name, posts] = await Promise.all([loadName(1), countPosts(1)])
+if (await isAdmin(1)) await notify("admin Ada")
+\`\`\`
+
+Effect has one function for each of these shapes. Each function takes effects and returns one new effect. The result type follows the shape of the input.
+
+| Function | Input | Result type | Use it when |
+|---|---|---|---|
+| \`Effect.forEach(items, f)\` | A list and a function that returns an effect | \`Effect<Array<B>>\` | You need one result per element |
+| \`Effect.forEach(items, f, { discard: true })\` | The same | \`Effect<void>\` | You only need the side effects |
+| \`Effect.all([a, b])\` | A tuple of effects | \`Effect<[A, B]>\` | A fixed number of different effects |
+| \`Effect.all({ a, b })\` | An object of effects | \`Effect<{ a: A; b: B }>\` | You want the results by name |
+| \`Effect.when(effect, condition)\` | An effect and an \`Effect<boolean>\` | \`Effect<Option<A>>\` | The condition is itself an effect |
+
+\`forEach\` and \`all\` run the effects in sequence by default. The Concurrency section shows the \`concurrency\` option. \`when\` returns an \`Option\`: \`Some\` with the value when the effect ran, \`None\` when it did not run. An \`Option\` is the Effect data type for "a value or nothing".
+
+Note: Effect v4 has no \`Effect.unless\` and no \`Effect.if\`. For a plain boolean, write an \`if\` statement inside \`Effect.gen\`.
+`,
+      code: `import { Effect, Option } from "effect"
+
+const names: Record<number, string> = { 1: "Ada", 2: "Lin", 3: "Bo" }
+const loadName = (id: number) => Effect.succeed(names[id] ?? "?")
+const countPosts = (id: number) => Effect.succeed(id * 2)
+const notify = (name: string) => Effect.sync(() => console.log("notified", name))
+const isAdmin = (id: number) => Effect.succeed(id === 1)
+
+const program = Effect.gen(function* () {
+  // 1. forEach: one effect per element, in order. The results come back as an array.
+  const loaded = yield* Effect.forEach([1, 2, 3], loadName)          // Array<string>
+  console.log("names:", loaded.join(", "))
+
+  // 2. forEach with discard: only the side effects. The result is void.
+  yield* Effect.forEach(loaded, notify, { discard: true })
+
+  // 3. all over a tuple: the result is a typed tuple.
+  const [name, posts] = yield* Effect.all([loadName(1), countPosts(1)])   // [string, number]
+  console.log(name, "has", posts, "posts")
+
+  // 4. all over an object: the result has the same keys as the input.
+  const data = yield* Effect.all({ name: loadName(2), posts: countPosts(2) })   // { name: string; posts: number }
+  console.log(data.name, "has", data.posts, "posts")
+
+  // 5. when: the effect runs only if the condition effect gives true. The result is an Option.
+  const sent = yield* Effect.when(notify("admin Ada"), isAdmin(1))
+  const skipped = yield* Effect.when(notify("admin Lin"), isAdmin(2))
+  console.log("sent:", Option.isSome(sent), "skipped:", Option.isNone(skipped))
+})
+
+Effect.runSync(program)
+`,
+      expectedOutput: `names: Ada, Lin, Bo
+notified Ada
+notified Lin
+notified Bo
+Ada has 2 posts
+Lin has 4 posts
+notified admin Ada
+sent: true skipped: true`,
+      after: `Change \`data.posts\` to \`data.post\`. TypeScript reports an error, because the result of \`Effect.all\` has only the keys of the input object. Remove \`{ discard: true }\` from step 2. The output is the same, but the \`yield*\` now gives an array of 3 \`undefined\` values.`
+    },
+    {
+      id: "getting-started-l8",
+      title: "Loops and recursion: whileLoop and suspend",
+      explain: `
+Some work does not have a list to loop over. A countdown runs until a number is 0. A poll runs until a job is complete. There are 3 ways to write this with effects:
+
+1. A plain \`for\` or \`while\` loop inside \`Effect.gen\`. Each step has \`yield*\`.
+2. \`Effect.whileLoop({ while, body, step })\`. \`while\` is a function that returns a boolean. \`body\` is a function that returns the effect for one step. \`step\` receives the result of each step.
+3. A function that returns an effect and calls itself.
+
+The third way has a trap. Look at the function \`eagerSumTo\` in the code. When you call \`eagerSumTo(5)\`, the function calls \`eagerSumTo(4)\` at once, and so on to 0. Thus the call builds all 6 effects before any run. For a large number, the call uses too much stack space and throws a \`RangeError\`.
+
+\`Effect.suspend(() => effect)\` is the fix. It takes a function and delays the call until the effect runs. Thus \`lazySumTo(5)\` builds nothing. The runtime calls the function one step at a time, and the stack stays small.
+
+Note: Effect v4 has no \`Effect.loop\` and no \`Effect.iterate\`. Use the 3 ways above.
+`,
+      code: `import { Effect } from "effect"
+
+// 1. A plain loop inside Effect.gen. yield* runs each step.
+const countdown = Effect.gen(function* () {
+  for (let n = 3; n > 0; n--) {
+    yield* Effect.sync(() => console.log("t-minus", n))
+  }
+  console.log("liftoff")
+})
+
+// 2. whileLoop: while and body are functions, so both run at run time, not before.
+let remaining = 3
+const drain = Effect.whileLoop({
+  while: () => remaining > 0,
+  body: () => Effect.sync(() => remaining--),
+  step: (left) => console.log("drained, before:", left)
+})
+
+// 3. Recursion without suspend. The call eagerSumTo(5) builds the whole chain before any run.
+let built = 0
+const eagerSumTo = (n: number): Effect.Effect<number> => {
+  built++
+  return n === 0 ? Effect.succeed(0) : Effect.map(eagerSumTo(n - 1), (rest) => rest + n)
+}
+const eager = eagerSumTo(5)
+console.log("eager: built", built, "effects before run")
+
+// 4. suspend delays the body until the effect runs. The call lazySumTo(5) builds nothing.
+built = 0
+const lazySumTo = (n: number): Effect.Effect<number> =>
+  Effect.suspend(() => {
+    built++
+    return n === 0 ? Effect.succeed(0) : Effect.map(lazySumTo(n - 1), (rest) => rest + n)
+  })
+const lazy = lazySumTo(5)
+console.log("lazy: built", built, "effects before run")
+
+Effect.runSync(countdown)
+Effect.runSync(drain)
+console.log("eager sum:", Effect.runSync(eager))
+console.log("lazy sum:", Effect.runSync(lazy), "- built", built, "during the run")
+`,
+      expectedOutput: `eager: built 6 effects before run
+lazy: built 0 effects before run
+t-minus 3
+t-minus 2
+t-minus 1
+liftoff
+drained, before: 3
+drained, before: 2
+drained, before: 1
+eager sum: 15
+lazy sum: 15 - built 6 during the run`,
+      after: `Change \`eagerSumTo(5)\` to \`eagerSumTo(200000)\`. The call throws a \`RangeError\` before any run, because each nested call needs stack space. Change \`lazySumTo(5)\` to \`lazySumTo(200000)\` in place of this. The program prints the sum, because the runtime builds one step at a time. Caution: a function that returns an effect and calls itself must make the call inside \`Effect.suspend\` or inside \`Effect.gen\`.`
+    },
+    {
       id: "getting-started-l5",
       title: "Bringing in code that can throw or is async",
       explain: `
@@ -295,6 +435,11 @@ runSync refused async work`,
       do: "Declare the error type in the return annotation, for example `Effect.Effect<number, string>`.",
       dont: "Do not annotate a function as `Effect.Effect<number>` when its body calls `Effect.fail`.",
       why: "`Effect.Effect<number>` means `E` is `never`, so the compiler rejects the `Effect.fail` in the body."
+    },
+    {
+      do: "Put the body of a function that returns an effect and calls itself inside `Effect.suspend`.",
+      dont: "Do not let such a function call itself directly in a `map` or `andThen` argument.",
+      why: "The first call builds the whole chain before any run, and a deep chain throws a `RangeError`."
     }
   ],
   challenges: [
@@ -353,6 +498,80 @@ Effect.runSync(program)
       explanation: `The line \`program\` on its own does nothing. A function name without a call also does nothing. You must give an effect to a runner such as \`runSync\` or \`runPromise\`. This is the most common surprise for people who come from Promises. A Promise starts to run when you create it.`
     },
     {
+      id: "getting-started-c7",
+      title: "The loop that runs nothing",
+      task: `The program must greet both names before it prints \`done\`, but only \`done\` prints. Replace the \`for\` loop with one Effect function that runs \`greet\` for each name. Do not change \`greet\`.`,
+      code: `import { Effect } from "effect"
+
+const greet = (name: string) => Effect.sync(() => console.log("hello", name))
+
+const program = Effect.gen(function* () {
+  for (const name of ["Ada", "Lin"]) {
+    greet(name)
+  }
+  console.log("done")
+})
+
+Effect.runSync(program)
+`,
+      solution: `import { Effect } from "effect"
+
+const greet = (name: string) => Effect.sync(() => console.log("hello", name))
+
+const program = Effect.gen(function* () {
+  yield* Effect.forEach(["Ada", "Lin"], greet, { discard: true })
+  console.log("done")
+})
+
+Effect.runSync(program)
+`,
+      expectedOutput: `hello Ada
+hello Lin
+done`,
+      hints: [
+        "greet(name) builds an effect. Nothing in the loop runs that effect.",
+        "The control flow lesson has a function that takes a list and a function, and runs one effect per element.",
+        "Write yield* Effect.forEach([\"Ada\", \"Lin\"], greet, { discard: true })."
+      ],
+      explanation: `\`greet(name)\` returns a description. The loop built 2 descriptions and threw both away, because no \`yield*\` ran them. \`Effect.forEach\` builds one effect that runs \`greet\` for each element in order. The \`yield*\` in front runs this effect. \`{ discard: true }\` says that the results are not important, so the type is \`Effect<void>\`. A \`yield* greet(name)\` inside the loop is also correct. \`forEach\` is shorter, and later you can add a \`concurrency\` option to it.`
+    },
+    {
+      id: "getting-started-c8",
+      title: "The key that does not exist",
+      task: `The program does not compile. The code reads a property that the result of \`Effect.all\` does not have. Correct the property name so that the program prints \`Ada has 2 posts\`. Do not change the object that goes into \`Effect.all\`.`,
+      code: `import { Effect } from "effect"
+
+const loadName = (id: number) => Effect.succeed(id === 1 ? "Ada" : "Lin")
+const countPosts = (id: number) => Effect.succeed(id * 2)
+
+const program = Effect.gen(function* () {
+  const data = yield* Effect.all({ name: loadName(1), posts: countPosts(1) })
+  console.log(data.name, "has", data.postCount, "posts")
+})
+
+Effect.runSync(program)
+`,
+      solution: `import { Effect } from "effect"
+
+const loadName = (id: number) => Effect.succeed(id === 1 ? "Ada" : "Lin")
+const countPosts = (id: number) => Effect.succeed(id * 2)
+
+const program = Effect.gen(function* () {
+  const data = yield* Effect.all({ name: loadName(1), posts: countPosts(1) })
+  console.log(data.name, "has", data.posts, "posts")
+})
+
+Effect.runSync(program)
+`,
+      expectedOutput: `Ada has 2 posts`,
+      hints: [
+        "Read the type error. Which property does not exist on the type of data?",
+        "The result of Effect.all over an object has the same keys as the input object.",
+        "Change data.postCount to data.posts."
+      ],
+      explanation: `\`Effect.all\` keeps the shape of its input. The input object has the keys \`name\` and \`posts\`, so the success type is \`{ name: string; posts: number }\`. The key \`postCount\` is not in this type, and the compiler rejects it. In plain TypeScript with \`Promise.all\`, you get an array, and you must count positions. With an object in \`Effect.all\`, each result has a name, and a wrong name is a type error.`
+    },
+    {
       id: "getting-started-c3",
       title: "A throw in the wrong constructor",
       task: `\`JSON.parse\` throws on bad input. At the moment, Effect treats this throw as a bug (a defect), and the raw \`SyntaxError\` comes out. Change only the constructor for the parse step. The failure must become the typed error \`"invalid json"\`, and the program must print \`error: invalid json\`.`,
@@ -388,7 +607,7 @@ if (Exit.isFailure(exit)) {
       expectedOutput: `error: invalid json`,
       hints: [
         "Effect.sync is a contract that the function cannot throw. JSON.parse breaks this contract.",
-        "Lesson 5 has a table. Which constructor is for sync code that can throw?",
+        "Lesson 7 has a table. Which constructor is for sync code that can throw?",
         "Use Effect.try({ try: () => JSON.parse(raw) as { name: string }, catch: () => \"invalid json\" })."
       ],
       explanation: `\`Effect.sync\` is a contract: the function does not throw. When the function throws, Effect treats the throw as a defect. A defect is an unexpected bug. \`runSyncExit\` still gives a \`Failure\`, but the error type stays \`never\`, and the raw \`SyntaxError\` comes out. \`Effect.try\` expects the throw. Its \`catch\` function changes the thrown value into a typed value. The result is an expected failure of type \`string\`. Callers see this failure in the type and can catch it. The Error Management section explains the difference between a failure and a defect in detail.`
@@ -422,7 +641,7 @@ Effect.runPromise(program)
       expectedOutput: `done after 5ms`,
       hints: [
         "Read the error message that the crash prints.",
-        "Lesson 6 has a table of runners. Which runner permits async work?",
+        "Lesson 8 has a table of runners. Which runner permits async work?",
         "Replace Effect.runSync with Effect.runPromise."
       ],
       explanation: `\`runSync\` must complete before it returns. If the effect waits for a Promise or a timer, \`runSync\` can only throw. \`runPromise\` returns a Promise and waits for the async work. Rule: use \`runPromise\` at the top of an application. Use \`runSync\` only for code that you know is synchronous, for example tests of pure logic.`
@@ -726,6 +945,10 @@ user 3 not found`,
     {
       q: "Inside `Effect.gen`, what is the equivalent of `await`?",
       a: "`yield*`. It unwraps the success value of an effect. If the effect fails, it stops the generator."
+    },
+    {
+      q: "What is the success type of `Effect.all({ user: loadUser(1), posts: loadPosts(1) })`, where `loadUser` gives a `User` and `loadPosts` gives an `Array<Post>`?",
+      a: "`{ user: User; posts: Array<Post> }`. `Effect.all` keeps the keys of the input object. With a tuple input, it gives a tuple. With `Effect.forEach` over a list, you get an `Array` of the results."
     }
   ]
 }

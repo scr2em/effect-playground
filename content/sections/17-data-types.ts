@@ -37,6 +37,8 @@ The compiler enforces the convention. You cannot forget an absent value, because
 | \`Date\` (mutable, local time) | \`DateTime\` | Immutable, UTC by default, explicit zones, calendar math |
 | \`Array\` (mutable) | \`Chunk\` | Immutable, cheap append, value equality. Streams emit Chunks. |
 | \`Map\` / \`Set\` (keys by reference) | \`HashMap\` / \`HashSet\` | Keys compare by value. An update returns a new collection. |
+| \`string\` for a token or a password | \`Redacted<string>\` | \`console.log\` and \`JSON.stringify\` print \`<redacted>\`. You read the value only where you use it. |
+| \`number\` for money | \`BigDecimal\` | Exact decimal math. \`0.1 + 0.2\` is \`0.3\`, not \`0.30000000000000004\`. |
 
 In this section, each type gets one small program. Then you combine them. The 2 next sections, Trait and Behaviour, explain the equality and order rules that these types share.
 `,
@@ -430,6 +432,140 @@ none()
 8 50
 2 3`,
       after: `The lookup key \`{ warehouse: "B", sku: "bolt" }\` was a new object each time, and it found the entry. A JS \`Map\` returns \`undefined\` for a new object. This works because \`HashMap\` uses the \`Equal\` and \`Hash\` traits. The next section explains them.`
+    },
+    {
+      id: "data-types-l8",
+      title: "Redacted: a secret that does not print",
+      explain: `
+Here is a plain TypeScript log line. It looks harmless:
+
+\`\`\`ts
+const token = "sk-live-12345"
+console.log("request failed for token " + token)   // the secret is now in the log
+\`\`\`
+
+The token is a \`string\`. A \`string\` prints everywhere: in a log, in a JSON body, in an error message. The compiler cannot tell a secret from a user name. \`Redacted<string>\` is a wrapper for a secret. When you print it, each print form shows \`<redacted>\`. The value is still inside, and \`Redacted.value\` returns it.
+
+| Function | What it does |
+|---|---|
+| \`Redacted.make(value)\` | Wraps the value. The option \`{ label }\` changes the print text to \`<redacted:label>\`. |
+| \`Redacted.value(secret)\` | Returns the original value. Call it at the point of use, and nowhere else. |
+| \`Equal.equals(a, b)\` | Compares 2 secrets by value. No secret becomes text. |
+| \`Config.redacted("KEY")\` | Reads a configuration key as \`Redacted<string>\` |
+
+\`Config.redacted\` is the form for API keys and passwords in configuration. The program in this lesson provides a \`ConfigProvider\` from a fixed object, as the Configuration section does. Note: a function that declares a \`string\` parameter does not accept a \`Redacted<string>\`. The compiler shows you each place where a secret becomes text.
+`,
+      code: `import { Config, ConfigProvider, Effect, Equal, Redacted } from "effect"
+
+// Plain TypeScript: a string prints everywhere, so the secret is now in the log
+const plainToken = "sk-live-12345"
+console.log("plain: request failed for token " + plainToken)
+
+// Redacted: the same value, but each print form shows <redacted>
+const token = Redacted.make("sk-live-12345")
+console.log("log:", token)
+console.log("concat: request failed for token " + token)
+console.log("json:", JSON.stringify({ token }))
+
+// The value is still there. Ask for it at the point of use, and nowhere else.
+const header = "Bearer " + Redacted.value(token)
+console.log("header length:", header.length)
+
+// Compare 2 secrets by value. No secret becomes text.
+console.log("equal:", Equal.equals(token, Redacted.make("sk-live-12345")))
+console.log("equal:", Equal.equals(token, Redacted.make("sk-test-00000")))
+
+// A label says which secret it is, not what it is
+console.log("labelled:", String(Redacted.make("hunter2", { label: "DB_PASSWORD" })))
+
+// Config.redacted reads a key as Redacted<string>, so a log of the config cannot show it
+const program = Effect.gen(function* () {
+  const apiKey = yield* Config.redacted("API_KEY")
+  console.log("config:", apiKey)
+  return Redacted.value(apiKey).length
+})
+
+const TestConfig = ConfigProvider.layer(ConfigProvider.fromUnknown({ API_KEY: "sk-live-12345" }))
+console.log("key length:", Effect.runSync(Effect.provide(program, TestConfig)))
+`,
+      expectedOutput: `plain: request failed for token sk-live-12345
+log: <redacted>
+concat: request failed for token <redacted>
+json: {"token":"<redacted>"}
+header length: 20
+equal: true
+equal: false
+labelled: <redacted:DB_PASSWORD>
+config: <redacted>
+key length: 13`,
+      after: `Search a code base for \`Redacted.value\`, and you find each place where a secret becomes text. Note: the \`+\` operator accepts any value, so \`"failed for " + token\` compiles and prints \`<redacted>\`. A function with a \`string\` parameter does not accept the wrapper. Change the \`header\` line to \`"Bearer " + token\`. The program compiles, and the header length becomes 17, because the text is \`Bearer <redacted>\`.`
+    },
+    {
+      id: "data-types-l9",
+      title: "BigDecimal: money without floating point errors",
+      explain: `
+Run these 3 lines in plain TypeScript:
+
+\`\`\`ts
+console.log(0.1 + 0.2)          // 0.30000000000000004
+console.log(0.1 + 0.2 === 0.3)  // false
+console.log(1.15 * 100)         // 114.99999999999999
+\`\`\`
+
+A \`number\` is a binary float. It cannot store \`0.1\` exactly. The error is small, but it moves into invoice totals, comparisons and rounded prices. \`BigDecimal\` stores a \`bigint\` and a scale. \`19.99\` is \`1999n\` with scale \`2\`. The math on it is exact.
+
+| Need | Function |
+|---|---|
+| Parse text | \`BigDecimal.fromString(s)\` returns \`Option<BigDecimal>\`. \`fromStringUnsafe(s)\` throws on bad text. |
+| Build from digits | \`BigDecimal.make(1999n, 2)\` is \`19.99\`. \`fromBigInt(3n)\` is \`3\`. |
+| Convert a number | \`BigDecimal.fromNumberUnsafe(n)\`. Caution: the float error of \`n\` comes with it. |
+| Math | \`sum\`, \`subtract\`, \`multiply\`, \`sumAll\` |
+| Round | \`BigDecimal.round(n, { scale: 2 })\`. \`BigDecimal.scale(n, 2)\` cuts the extra digits toward zero. |
+| Compare | \`BigDecimal.equals\`, \`Equal.equals\`, \`isLessThan\`. \`BigDecimal.Order\` sorts an array. |
+| Print | \`BigDecimal.format(n)\` |
+
+Note: \`format\` removes zeros at the end, so \`5.00\` prints as \`5\`. Note: \`===\` compares references. 2 decimals with the same value are different objects.
+`,
+      code: `import { BigDecimal, Equal } from "effect"
+
+// Plain numbers are binary floats. They cannot store 0.1 exactly.
+console.log(0.1 + 0.2, 0.1 + 0.2 === 0.3)
+
+// BigDecimal stores a bigint and a scale: 0.1 is 1n with scale 1. The sum is exact.
+const a = BigDecimal.fromStringUnsafe("0.1")
+const b = BigDecimal.fromStringUnsafe("0.2")
+const sum = BigDecimal.sum(a, b)
+console.log(BigDecimal.format(sum), BigDecimal.equals(sum, BigDecimal.fromStringUnsafe("0.3")))
+
+// 3 constructors for the same value. fromString returns an Option for text that you do not trust.
+console.log(BigDecimal.equals(BigDecimal.make(1999n, 2), BigDecimal.fromStringUnsafe("19.99")), BigDecimal.format(BigDecimal.fromNumberUnsafe(19.99)))
+console.log(String(BigDecimal.fromString("19.99x")))
+
+// round uses "half-from-zero" by default. scale cuts the extra digits. format removes zeros at the end.
+const raw = BigDecimal.fromStringUnsafe("11.3943")
+console.log(BigDecimal.format(BigDecimal.round(raw, { scale: 2 })), BigDecimal.format(BigDecimal.scale(raw, 1)), BigDecimal.format(BigDecimal.fromStringUnsafe("5.00")))
+
+// === compares references. equals, Equal.equals and Order compare the value.
+console.log(a === BigDecimal.fromStringUnsafe("0.1"), Equal.equals(a, BigDecimal.fromStringUnsafe("0.1")))
+console.log(BigDecimal.isLessThan(a, b), [b, a].sort(BigDecimal.Order).map(BigDecimal.format).join(" "))
+
+// A small invoice: 2 lines, 19% VAT rounded to cents
+const lines = [["19.99", 3n], ["4.25", 2n]] as const
+const net = BigDecimal.sumAll(
+  lines.map(([price, qty]) => BigDecimal.multiply(BigDecimal.fromStringUnsafe(price), BigDecimal.fromBigInt(qty)))
+)
+const vat = BigDecimal.round(BigDecimal.multiply(net, BigDecimal.fromStringUnsafe("0.19")), { scale: 2 })
+console.log("net", BigDecimal.format(net), "vat", BigDecimal.format(vat), "total", BigDecimal.format(BigDecimal.sum(net, vat)))
+`,
+      expectedOutput: `0.30000000000000004 false
+0.3 true
+true 19.99
+none()
+11.39 11.3 5
+false true
+true 0.1 0.2
+net 68.47 vat 13.01 total 81.48`,
+      after: `Change the first \`fromStringUnsafe("0.1")\` to \`fromNumberUnsafe(0.1 + 0.2)\` and print it with \`format\`. You get \`3.0000000000000004e-1\`. The float error was in the number before \`BigDecimal\` saw it. Parse prices from text, or build them from integer cents with \`make\`. Do not do the math in \`number\` first.`
     }
   ],
   dosAndDonts: [
@@ -713,6 +849,74 @@ console.log("trial ends", DateTime.formatIsoDate(trialEnds))
         "Keep the result: const trialEnds = DateTime.add(signup, { days: 30 })."
       ],
       explanation: `\`DateTime\` values are immutable. \`DateTime.add\` returns a new value and does not change \`signup\`. The program did not keep the result, so \`trialEnds\` was still the signup date. With a JS \`Date\`, \`setDate\` changes the object in place. The same code would give the correct output, and it would also change \`signup\` for all other code that holds it. With an immutable value, the only way to get the new date is to keep the return value. That is what makes the value safe to share.`
+    },
+    {
+      id: "data-types-c7",
+      title: "A secret where a string is expected",
+      task: `\`authHeader\` needs the text of the key. The program does not compile, because it gives the wrapper to a function that wants a \`string\`. Fix the call. Do not change \`authHeader\`. Expected output: \`header length: 20\`.`,
+      code: `import { Redacted } from "effect"
+
+const apiKey = Redacted.make("sk-live-12345")
+
+// Builds the header of an outgoing request. It needs the text of the key.
+const authHeader = (key: string): string => "Bearer " + key
+
+const header = authHeader(apiKey)
+console.log("header length:", header.length)
+`,
+      solution: `import { Redacted } from "effect"
+
+const apiKey = Redacted.make("sk-live-12345")
+
+// Builds the header of an outgoing request. It needs the text of the key.
+const authHeader = (key: string): string => "Bearer " + key
+
+const header = authHeader(Redacted.value(apiKey))
+console.log("header length:", header.length)
+`,
+      expectedOutput: `header length: 20`,
+      hints: [
+        "Read the type error: Redacted<string> is not assignable to string. The wrapper is not the text.",
+        "Lesson 8 has 1 function that returns the original value. Use it at the point of use, and nowhere else.",
+        "Call authHeader(Redacted.value(apiKey))."
+      ],
+      explanation: `\`Redacted<string>\` and \`string\` are different types. The wrapper does not have the methods of a string, and the compiler rejects the call. This is the purpose of the type. Each place where a secret becomes text needs \`Redacted.value\`, and a reviewer can search for it. Note: the \`+\` operator does not give this check. \`"Bearer " + apiKey\` compiles and gives \`Bearer <redacted>\`, a header with the wrong text and length 17. The type error found the mistake before the request went out.`
+    },
+    {
+      id: "data-types-c8",
+      title: "Two decimals compared with ===",
+      task: `The customer paid \`100.00\`, and the invoice lines sum to \`100.00\`. The program prints \`open: 0\`. Fix the comparison so that it prints \`settled\`.`,
+      code: `import { BigDecimal } from "effect"
+
+const paid = BigDecimal.fromStringUnsafe("100.00")
+const due = BigDecimal.sum(BigDecimal.fromStringUnsafe("59.97"), BigDecimal.fromStringUnsafe("40.03"))
+
+// Is the invoice settled?
+if (paid === due) {
+  console.log("settled")
+} else {
+  console.log("open: " + BigDecimal.format(BigDecimal.subtract(due, paid)))
+}
+`,
+      solution: `import { BigDecimal } from "effect"
+
+const paid = BigDecimal.fromStringUnsafe("100.00")
+const due = BigDecimal.sum(BigDecimal.fromStringUnsafe("59.97"), BigDecimal.fromStringUnsafe("40.03"))
+
+// Is the invoice settled? Compare the value, not the reference.
+if (BigDecimal.equals(paid, due)) {
+  console.log("settled")
+} else {
+  console.log("open: " + BigDecimal.format(BigDecimal.subtract(due, paid)))
+}
+`,
+      expectedOutput: `settled`,
+      hints: [
+        "The 2 values are equal. What does === compare when both sides are objects?",
+        "Lesson 9 shows 2 functions that compare a BigDecimal by value.",
+        "Use BigDecimal.equals(paid, due), or Equal.equals(paid, due)."
+      ],
+      explanation: `A \`BigDecimal\` is an object. \`===\` compares the references, and \`paid\` and \`due\` are 2 different objects. The compiler permits this comparison, because both sides have the same type. \`BigDecimal.equals\` normalizes both values first, so \`100.00\` and \`100.0\` are also equal. Note: \`paid.value === due.value\` is not correct either. \`100.00\` has value \`10000n\` and scale \`2\`, and \`100.0\` has value \`1000n\` and scale \`1\`. Use \`BigDecimal.equals\` or \`Equal.equals\` for each comparison of decimals.`
     }
   ],
   problems: [
@@ -1001,6 +1205,14 @@ distinct skus: 3`,
     {
       q: "Why does `HashMap.get(map, { id: 1 })` find an entry when `new Map().get({ id: 1 })` does not?",
       a: "`HashMap` compares keys with the structural `Equal` of Effect and puts them in buckets with `Hash`. A new object with the same contents is the same key. A JS `Map` compares object keys by reference. `Data.Class` instances, Options, Chunks and plain objects all work as HashMap keys for the same reason."
+    },
+    {
+      q: "An API key comes from configuration. Which function would you use to read it, and what prints when you log the result?",
+      a: "`Config.redacted(\"API_KEY\")`. The result is a `Redacted<string>`. `console.log`, `String()` and `JSON.stringify` show `<redacted>`. `Redacted.value(key)` returns the text at the point of use."
+    },
+    {
+      q: "What would the type of `BigDecimal.fromString(\"19.99\")` be? Why does `fromStringUnsafe` also exist?",
+      a: "`Option<BigDecimal>`. Text that is not a decimal gives `None`. `fromStringUnsafe` returns a `BigDecimal` and throws on bad text. Use it for literals in the code, where the text is known."
     }
   ]
 }

@@ -453,6 +453,142 @@ consumer got 1,2,3,4,5`,
       after: `Change \`Queue.bounded<number, Cause.Done>(2)\` to \`Queue.unbounded<number, Cause.Done>()\`. Keep the \`Cause.Done\` type argument, because \`Queue.end\` needs it. The producer never waits and offers all 5 values immediately. A bounded queue costs a little producer speed and gives a guarantee about memory.`
     },
     {
+      id: "concurrency-l10",
+      title: "Queue in depth: bounded, dropping, sliding, and end",
+      explain: `
+A \`Queue\` has a capacity and a strategy. The strategy decides what happens when a producer offers a value to a full queue. Lesson 7 used the default strategy. There are 4 constructors.
+
+| Constructor | When the queue is full, \`offer\`... | Returns | Use it when |
+|---|---|---|---|
+| \`Queue.bounded(n)\` | waits until a consumer takes a value | \`true\` | every value must arrive, and a slow consumer must slow the producer |
+| \`Queue.dropping(n)\` | refuses the new value | \`false\` | the old values are more important, for example the first N requests |
+| \`Queue.sliding(n)\` | removes the oldest value and stores the new one | \`true\` | only the latest values matter, for example sensor values |
+| \`Queue.unbounded()\` | is never full | \`true\` | the producer is slower than the consumer, and memory is not a concern |
+
+\`Queue.offer\` returns a boolean in each case. For \`bounded\` and \`unbounded\`, the value is always \`true\`. For \`dropping\`, \`false\` tells the producer that the queue did not store the value.
+
+\`Queue.end\` closes the queue for new values. The values that are already in the queue stay. Consumers take them 1 by 1 or in groups. \`Queue.takeAll\` takes every value that is present. \`Queue.takeBetween(queue, min, max)\` waits for at least \`min\` values and takes at most \`max\`. When the queue is empty and ended, a \`take\` fails with \`Cause.Done\`. The type argument \`Cause.Done\` on the constructor makes this failure part of the type.
+
+The program tests each strategy. In part 1, the log proves that the second \`offer\` waited for the \`take\`.
+`,
+      code: `import { Cause, Effect, Fiber, Queue, Ref } from "effect"
+
+const program = Effect.gen(function* () {
+  // 1. bounded: offer waits while the queue is full. The log proves the order.
+  const log = yield* Ref.make<Array<string>>([])
+  const note = (line: string) => Ref.update(log, (xs) => [...xs, line])
+  const bounded = yield* Queue.bounded<number>(1)
+  const producer = yield* Effect.forkChild(Effect.gen(function* () {
+    yield* Queue.offer(bounded, 1)
+    yield* note("offered 1")
+    yield* Queue.offer(bounded, 2)          // suspends: the only slot is taken
+    yield* note("offered 2")
+  }))
+  yield* Effect.sleep("5 millis")
+  yield* note("consumer takes")
+  yield* Queue.take(bounded)                // frees the slot, the producer continues
+  yield* Fiber.join(producer)
+  console.log("bounded :", (yield* Ref.get(log)).join(", "))
+
+  // 2. dropping: a full queue refuses the new value, and offer returns false
+  const dropping = yield* Queue.dropping<number>(2)
+  const accepted = yield* Effect.forEach([1, 2, 3], (n) => Queue.offer(dropping, n))
+  console.log("dropping: accepted", accepted.join(","), "| kept", (yield* Queue.takeAll(dropping)).join(","))
+
+  // 3. sliding: a full queue removes the oldest value, and offer returns true
+  const sliding = yield* Queue.sliding<number>(2)
+  const accepted2 = yield* Effect.forEach([1, 2, 3], (n) => Queue.offer(sliding, n))
+  console.log("sliding : accepted", accepted2.join(","), "| kept", (yield* Queue.takeAll(sliding)).join(","))
+
+  // 4. end: the queue keeps its values, consumers drain them, then take fails with Done
+  const jobs = yield* Queue.unbounded<number, Cause.Done>()
+  yield* Queue.offerAll(jobs, [1, 2, 3, 4, 5])
+  yield* Queue.end(jobs)
+  console.log("size after end:", yield* Queue.size(jobs))
+  console.log("batch of 1..3 :", (yield* Queue.takeBetween(jobs, 1, 3)).join(","))
+  console.log("the rest      :", (yield* Queue.takeAll(jobs)).join(","))
+  const last = yield* Queue.take(jobs).pipe(
+    Effect.catchTag("Done", () => Effect.succeed("Done: no more jobs"))
+  )
+  console.log("then          :", last)
+})
+
+Effect.runPromise(program)
+`,
+      expectedOutput: `bounded : offered 1, consumer takes, offered 2
+dropping: accepted true,true,false | kept 1,2
+sliding : accepted true,true,true | kept 2,3
+size after end: 5
+batch of 1..3 : 1,2,3
+the rest      : 4,5
+then          : Done: no more jobs`,
+      after: `In part 1, "offered 2" comes after "consumer takes", although the producer called \`offer\` first. The producer waited 5 ms for the consumer. Change \`Queue.bounded<number>(1)\` to \`Queue.dropping<number>(1)\`: the second offer returns \`false\` at once, and "offered 2" moves before "consumer takes". Note: \`Queue.end\` did not remove the 5 values. The end signal only arrives after the last value.`
+    },
+    {
+      id: "concurrency-l11",
+      title: "Latch: a gate that opens for all waiters",
+      explain: `
+A \`Latch\` is a gate with 2 states: open or closed. \`Latch.make()\` creates a closed latch. \`Latch.await(latch)\` suspends a fiber while the latch is closed. \`Latch.open(latch)\` opens the gate and wakes every waiter, in the order of arrival. A fiber that arrives later does not wait, because the gate stays open. \`Latch.close(latch)\` closes the gate again for new waiters. This makes a latch reusable.
+
+\`Latch.whenOpen(latch, effect)\` is the common form. It waits for the gate, then it runs the effect. Use it for "do not serve requests until the cache is warm", or "pause all workers, then resume them".
+
+\`Latch.release\` is a related function. It wakes the current waiters, but it does not open the gate. A fiber that arrives afterwards suspends again.
+
+| Primitive | Carries | Completes | Reusable | Use it when |
+|---|---|---|---|---|
+| \`Deferred\` | 1 value or 1 error | 1 time. A second \`succeed\` returns \`false\` | No | a waiter needs a result from another fiber |
+| \`Latch\` | no value | \`open\`, and \`close\` resets it | Yes | many fibers wait for a signal: start, pause, resume |
+| \`Semaphore\` | permits | never. A permit comes back after use | Yes | at most N fibers use a resource at the same time |
+
+The program forks 3 workers before the latch opens. All 3 run after 1 \`open\`. Then the program closes the latch and shows that a new waiter suspends. The last line shows the 1-time rule of \`Deferred\`.
+`,
+      code: `import { Deferred, Effect, Fiber, Latch, Option, Ref } from "effect"
+
+const program = Effect.gen(function* () {
+  const gate = yield* Latch.make()             // starts closed
+  const log = yield* Ref.make<Array<string>>([])
+  const note = (line: string) => Ref.update(log, (xs) => [...xs, line])
+
+  const worker = (name: string) =>
+    Effect.gen(function* () {
+      yield* note(name + " waits")
+      yield* Latch.await(gate)                 // suspends while the gate is closed
+      yield* note(name + " runs")
+    })
+
+  const fibers = yield* Effect.forEach(["a", "b", "c"], (n) => Effect.forkChild(worker(n)))
+  yield* Effect.sleep("5 millis")
+  console.log("open:", Latch.isOpen(gate), "|", (yield* Ref.get(log)).join(", "))
+
+  yield* Latch.open(gate)                      // wakes every waiter at once
+  yield* Fiber.joinAll(fibers)
+  console.log("open:", Latch.isOpen(gate), "|", (yield* Ref.get(log)).join(", "))
+
+  // whenOpen on an open latch runs the effect at once
+  console.log(yield* Latch.whenOpen(gate, Effect.succeed("late worker runs at once")))
+
+  // close makes the gate reusable: a new waiter suspends again
+  yield* Latch.close(gate)
+  const late = yield* Latch.await(gate).pipe(Effect.as("passed"), Effect.timeoutOption("5 millis"))
+  console.log("after close:", Option.isNone(late) ? "a new waiter suspends" : "passed")
+
+  // Deferred: 1 value, 1 time. The second completion is ignored.
+  const cell = yield* Deferred.make<number>()
+  const first = yield* Deferred.succeed(cell, 1)
+  const second = yield* Deferred.succeed(cell, 2)
+  console.log("deferred:", first, second, "value", yield* Deferred.await(cell))
+})
+
+Effect.runPromise(program)
+`,
+      expectedOutput: `open: false | a waits, b waits, c waits
+open: true | a waits, b waits, c waits, a runs, b runs, c runs
+late worker runs at once
+after close: a new waiter suspends
+deferred: true false value 1`,
+      after: `The 3 workers wait on 1 gate, and 1 \`open\` call wakes all of them. A \`Deferred\` can do the same with \`Deferred.await\`, but it cannot close again. Change \`Latch.make()\` to \`Latch.make(true)\`: the latch starts open, so each worker runs in its first turn, and the log becomes "a waits, a runs, b waits, b runs, c waits, c runs".`
+    },
+    {
       id: "concurrency-l8",
       title: "PubSub and Semaphore, and which primitive to use",
       explain: `
@@ -1044,6 +1180,120 @@ second: done`,
         "Wrap the body in Semaphore.withPermits(lock, 1)(...) and remove take and release."
       ],
       explanation: `\`Effect.fail\` stops the generator at once, so the \`release\` line never runs and the only permit stays taken. Every later caller waits forever. \`withPermits\` acquires the permit, runs the effect, and gives the permit back in a finalizer. The finalizer runs on success, on failure, and on interrupt. This is the same rule as \`acquireRelease\` in Resource Management: put the release next to the acquire, and let the runtime run it.`
+    }
+,
+    {
+      id: "concurrency-c10",
+      title: "The queue that cannot end",
+      task: `The producer calls \`Queue.end\`, and the consumer stops on \`Done\`, but the file does not compile. The type of the queue does not permit an end signal. Fix the type of the queue. Do not change the producer or the consumer. The program must print \`total: 60\`.`,
+      code: `import { Effect, Fiber, Queue } from "effect"
+
+const program = Effect.gen(function* () {
+  const jobs = yield* Queue.bounded<number>(2)
+
+  const producer = yield* Effect.forkChild(Effect.gen(function* () {
+    yield* Queue.offerAll(jobs, [10, 20, 30])
+    yield* Queue.end(jobs)
+  }))
+
+  const consumer = yield* Effect.forkChild(Effect.gen(function* () {
+    let total = 0
+    yield* Effect.gen(function* () {
+      total += yield* Queue.take(jobs)
+    }).pipe(Effect.forever, Effect.catchTag("Done", () => Effect.void))
+    return total
+  }))
+
+  yield* Fiber.join(producer)
+  console.log("total:", yield* Fiber.join(consumer))
+})
+
+Effect.runPromise(program)
+`,
+      solution: `import { Cause, Effect, Fiber, Queue } from "effect"
+
+const program = Effect.gen(function* () {
+  const jobs = yield* Queue.bounded<number, Cause.Done>(2)
+
+  const producer = yield* Effect.forkChild(Effect.gen(function* () {
+    yield* Queue.offerAll(jobs, [10, 20, 30])
+    yield* Queue.end(jobs)
+  }))
+
+  const consumer = yield* Effect.forkChild(Effect.gen(function* () {
+    let total = 0
+    yield* Effect.gen(function* () {
+      total += yield* Queue.take(jobs)
+    }).pipe(Effect.forever, Effect.catchTag("Done", () => Effect.void))
+    return total
+  }))
+
+  yield* Fiber.join(producer)
+  console.log("total:", yield* Fiber.join(consumer))
+})
+
+Effect.runPromise(program)
+`,
+      expectedOutput: `total: 60`,
+      hints: [
+        "Read the first type error. Which error type does Queue.end need on the queue, and which one does the queue have?",
+        "Queue.bounded<number>(2) has an error type of never. Lesson 7 and lesson 8 give a second type argument.",
+        "Write Queue.bounded<number, Cause.Done>(2) and import Cause."
+      ],
+      explanation: `\`Queue.end\` only accepts a queue whose error type includes \`Cause.Done\`. \`Queue.bounded<number>(2)\` has an error type of \`never\`, so this queue can never end, and \`Queue.end\` does not compile. The consumer has the same problem: \`catchTag("Done")\` finds no \`Done\` in the error channel of \`take\`. The second type argument puts \`Done\` into the type of every \`take\`. Each consumer then must decide what happens at the end. The runtime does not need the type. Without the type, the compiler cannot see that the consumer stops.`
+    },
+    {
+      id: "concurrency-c11",
+      title: "The gate that stayed closed",
+      task: `Workers \`a\` and \`b\` wait until the cache is warm. Worker \`c\` arrives after the warm-up, and it must not wait. The program prints \`c timed out\`. Change 1 call so that the program prints \`a served, b served\` and then \`c served\`.`,
+      code: `import { Effect, Fiber, Latch, Option } from "effect"
+
+const program = Effect.gen(function* () {
+  const ready = yield* Latch.make()
+
+  // 2 workers wait before the cache is warm
+  const worker = (name: string) => Latch.whenOpen(ready, Effect.succeed(name + " served"))
+  const early = yield* Effect.forEach(["a", "b"], (n) => Effect.forkChild(worker(n)))
+
+  yield* Effect.sleep("5 millis")            // cache warm-up
+  yield* Latch.release(ready)
+  console.log((yield* Fiber.joinAll(early)).join(", "))
+
+  // a worker that arrives after the warm-up must not wait
+  const late = yield* worker("c").pipe(Effect.timeoutOption("5 millis"))
+  console.log(Option.isSome(late) ? late.value : "c timed out")
+})
+
+Effect.runPromise(program)
+`,
+      solution: `import { Effect, Fiber, Latch, Option } from "effect"
+
+const program = Effect.gen(function* () {
+  const ready = yield* Latch.make()
+
+  // 2 workers wait before the cache is warm
+  const worker = (name: string) => Latch.whenOpen(ready, Effect.succeed(name + " served"))
+  const early = yield* Effect.forEach(["a", "b"], (n) => Effect.forkChild(worker(n)))
+
+  yield* Effect.sleep("5 millis")            // cache warm-up
+  yield* Latch.open(ready)
+  console.log((yield* Fiber.joinAll(early)).join(", "))
+
+  // a worker that arrives after the warm-up must not wait
+  const late = yield* worker("c").pipe(Effect.timeoutOption("5 millis"))
+  console.log(Option.isSome(late) ? late.value : "c timed out")
+})
+
+Effect.runPromise(program)
+`,
+      expectedOutput: `a served, b served
+c served`,
+      hints: [
+        "Lesson 9 shows 2 calls that wake the waiters. Only 1 of them changes the state of the gate.",
+        "Latch.release wakes the waiters that are present at that moment. Worker c was not present.",
+        "Replace Latch.release(ready) with Latch.open(ready)."
+      ],
+      explanation: `\`Latch.release\` wakes the fibers that wait at that moment, but the gate stays closed. Workers \`a\` and \`b\` were present, so they ran. Worker \`c\` arrived after the release, found a closed gate, and waited until the timeout. \`Latch.open\` changes the state to open. Every waiter runs, and every later \`whenOpen\` runs at once. Use \`open\` for a signal that stays true, such as "the cache is warm". Use \`release\` for 1 round, such as "let the current group through".`
     }
   ],
   problems: [

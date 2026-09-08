@@ -267,6 +267,138 @@ for (const status of [200, 503, 0, 404]) {
       after: `Inside the \`mapError\` handler, the type of \`e\` is only \`HttpError\`, because \`catchFilter\` already removed \`ParseError\`. Swap steps 2 and 3. The \`mapError\` handler must now process both classes, and \`e.status\` no longer compiles.`
     },
     {
+      id: "error-management-l8",
+      title: "Error channel operators: filterOrFail, mapBoth, flip, firstSuccessOf",
+      explain: `
+The catch functions remove errors. This lesson has 4 functions that work with the error channel in other ways. In plain TypeScript, each one is an \`if\` with a \`throw\`, or a \`try/catch\` that throws a new error. The last one is a chain of \`try/catch\` blocks with fallbacks.
+
+| Function | What it does | Use it when |
+|---|---|---|
+| \`Effect.filterOrFail(test, orFailWith)\` | Tests the success value. If the test is false, it fails with the error from \`orFailWith\` | A value must satisfy a rule before the next step |
+| \`Effect.mapBoth({ onFailure, onSuccess })\` | Changes the error and the success value in one step | Both channels change at a boundary |
+| \`Effect.flip(effect)\` | Swaps the 2 channels: \`Effect<A, E>\` becomes \`Effect<E, A>\` | A test expects a failure, or you process the error as a value |
+| \`Effect.firstSuccessOf([a, b, c])\` | Runs the effects in order and stops at the first success | Several sources give the same value, with fallbacks |
+
+\`filterOrFail\` adds the error from \`orFailWith\` to \`E\`. When you omit \`orFailWith\`, it fails with \`NoSuchElementError\`. \`mapBoth\` is \`map\` and \`mapError\` in one call. \`firstSuccessOf\` fails only when every effect fails, with the error of the last one.
+
+Note: Effect v4 has no \`orElseFail\`, no \`orElse\`, and no \`merge\`. Use \`mapError\` to replace an error, \`catch\` to try another effect, and \`match\` to get one plain value from both outcomes.
+`,
+      code: `import { Effect, Schema } from "effect"
+
+class TooSmall extends Schema.TaggedError<TooSmall>()("TooSmall", { amount: Schema.Number }) {}
+class AppError extends Schema.TaggedError<AppError>()("AppError", { message: Schema.String }) {}
+
+// 1. filterOrFail: keep the value if the test passes, or fail with a typed error.
+const checkAmount = (amount: number): Effect.Effect<number, TooSmall> =>
+  Effect.succeed(amount).pipe(
+    Effect.filterOrFail((n) => n >= 10, (n) => new TooSmall({ amount: n }))
+  )
+
+// 2. mapBoth: change both channels in one step. number -> string, TooSmall -> AppError.
+const describe = (amount: number): Effect.Effect<string, AppError> =>
+  checkAmount(amount).pipe(
+    Effect.mapBoth({
+      onFailure: (e) => new AppError({ message: "amount " + e.amount + " is too small" }),
+      onSuccess: (n) => "accepted " + n
+    })
+  )
+
+// 3. flip: the error becomes the success value. A test that expects a failure reads it directly.
+const expectFailure = (amount: number): Effect.Effect<AppError, string> => Effect.flip(describe(amount))
+
+// 4. firstSuccessOf: try the sources in order. The first success wins, and the rest do not run.
+const fromCache = (key: string): Effect.Effect<string, string> =>
+  key === "a" ? Effect.succeed("cache:" + key) : Effect.fail("cache miss")
+const fromDb = (key: string): Effect.Effect<string, string> =>
+  key === "b" ? Effect.succeed("db:" + key) : Effect.fail("db miss")
+const lookup = (key: string) => Effect.firstSuccessOf([fromCache(key), fromDb(key), Effect.succeed("default")])
+
+const program = Effect.gen(function* () {
+  console.log(yield* describe(25))
+  const error = yield* expectFailure(3)
+  console.log("expected failure:", error.message)
+  for (const key of ["a", "b", "c"]) {
+    console.log(key, "->", yield* lookup(key))
+  }
+})
+
+Effect.runSync(program)
+`,
+      expectedOutput: `accepted 25
+expected failure: amount 3 is too small
+a -> cache:a
+b -> db:b
+c -> default`,
+      after: `Change \`expectFailure(3)\` to \`expectFailure(25)\`. The program now fails, because after \`flip\` the success \`"accepted 25"\` is the error. Remove \`Effect.succeed("default")\` from \`lookup\`. For the key \`"c"\` the program fails with \`"db miss"\`, the error of the last source.`
+    },
+    {
+      id: "error-management-l9",
+      title: "Collect every error, not only the first: partition and validate",
+      explain: `
+A form has 4 fields, and 2 of them are empty. With \`Effect.forEach\`, the check stops at the first empty field. The user corrects one field, sends the form again, and sees the next error. A good form shows all errors at once. Effect has 3 ways to run every element and keep every outcome:
+
+| Function | Runs every element? | Result type | Use it when |
+|---|---|---|---|
+| \`Effect.forEach(items, f)\` | No. It stops at the first failure | \`Effect<Array<B>, E>\` | One bad element must stop the work |
+| \`Effect.partition(items, f)\` | Yes | \`Effect<[Array<E>, Array<B>], never>\` | You process both lists, and the work must not fail |
+| \`Effect.validate(items, f)\` | Yes | \`Effect<Array<B>, NonEmptyArray<E>>\` | One form, all messages at once, then a failure |
+| \`Effect.all({ a, b }, { mode: "result" })\` | Yes | \`Effect<{ a: Result<A, E>; ... }, never>\` | A fixed set of effects, each outcome by key |
+| \`Effect.forEach(items, (x) => Effect.result(f(x)))\` | Yes | \`Effect<Array<Result<B, E>>, never>\` | You need each outcome in order |
+
+\`partition\` gives a tuple. The failures come first, then the successes. \`validate\` fails with a non-empty array of every error, or succeeds with every result.
+
+\`Effect.all\` without \`mode\` stops at the first failure, also with the \`concurrency\` option. It interrupts the other fibers. The \`Cause\` holds only 1 \`Fail\` reason. The interrupted fibers do not appear in it.
+
+Note: Effect v3 had \`validateAll\` and \`validateFirst\`. Effect v4 has only \`validate\`.
+`,
+      code: `import { Cause, Effect, Exit, Result, Schema } from "effect"
+
+class Invalid extends Schema.TaggedError<Invalid>()("Invalid", { sku: Schema.String }) {}
+
+const check = (sku: string): Effect.Effect<string, Invalid> =>
+  sku.startsWith("sku-") ? Effect.succeed(sku.toUpperCase()) : Effect.fail(new Invalid({ sku }))
+
+const skus = ["sku-1", "bad-2", "sku-3", "bad-4"]
+
+const program = Effect.gen(function* () {
+  // 1. forEach stops at the first failure. sku-3 and bad-4 never run.
+  const first = yield* Effect.result(Effect.forEach(skus, check))
+  console.log("forEach:", Result.isFailure(first) ? "stopped at " + first.failure.sku : "all ok")
+
+  // 2. partition runs every element and never fails. Failures on the left, successes on the right.
+  const [failed, ok] = yield* Effect.partition(skus, check)
+  console.log("partition:", failed.map((e) => e.sku).join(","), "|", ok.join(","))
+
+  // 3. validate runs every element. It fails with every error in a non-empty array.
+  const validated = yield* Effect.result(Effect.validate(skus, check))
+  console.log("validate:", Result.isFailure(validated) ? validated.failure.length + " errors" : "all ok")
+
+  // 4. all with mode "result": every entry is a Result, with the same keys as the input.
+  const results = yield* Effect.all({ a: check("sku-1"), b: check("bad-2") }, { mode: "result" })
+  console.log("all result:", results.a._tag, results.b._tag)
+
+  // 5. forEach with Effect.result: one Result per element, in input order, also with concurrency.
+  const each = yield* Effect.forEach(skus, (sku) => Effect.result(check(sku)), { concurrency: "unbounded" })
+  console.log("forEach+result:", each.map((r) => (Result.isSuccess(r) ? "ok" : "fail")).join(","))
+
+  // 6. all without mode: the first failure wins, also with concurrency. The cause has 1 reason.
+  const exit = yield* Effect.exit(Effect.all([check("bad-2"), check("bad-4")], { concurrency: "unbounded" }))
+  if (Exit.isFailure(exit)) {
+    console.log("all cause:", exit.cause.reasons.length, "reason,", (Cause.squash(exit.cause) as Invalid).sku)
+  }
+})
+
+Effect.runSync(program)
+`,
+      expectedOutput: `forEach: stopped at bad-2
+partition: bad-2,bad-4 | SKU-1,SKU-3
+validate: 2 errors
+all result: Success Failure
+forEach+result: ok,fail,ok,fail
+all cause: 1 reason, bad-2`,
+      after: `Hover over \`validated\` in an editor. The failure side is \`NonEmptyArray<Invalid>\`, so \`validated.failure[0]\` is always present. Change \`check\` so that every sku is valid. \`validate\` then succeeds with 4 strings, and \`partition\` gives an empty first list.`
+    },
+    {
       id: "error-management-l5",
       title: "Turning a failure into a plain value",
       explain: `
@@ -657,7 +789,7 @@ console.log(Effect.runSync(program))
       expectedOutput: `count: 0 (fallback)`,
       hints: [
         "What is the error type of parseCount? Hover over it: E is never. What can Effect.catch see?",
-        "A throw inside Effect.sync is a defect, not a failure. Lesson 6 lists the 2 functions that see defects.",
+        "A throw inside Effect.sync is a defect, not a failure. Lesson 8 lists the 2 functions that see defects.",
         "Replace Effect.catch with Effect.catchDefect (or Effect.catchCause)."
       ],
       explanation: `\`Effect.sync\` declares that the function does not throw. Thus the exception became a defect, and \`E\` stayed \`never\`. \`Effect.catch\` looks only at \`E\`, and \`E\` had nothing to catch. \`catchDefect\` is the explicit way to catch bugs. The better long-term fix is a typed failure with \`Effect.try\` or \`Effect.fail\`. Then the normal \`catch\` works, and the signature is correct. When you cannot change the code that throws, \`catchDefect\` is the correct tool.`
@@ -775,6 +907,91 @@ fallback {}`,
       explanation: `\`mapError\` is \`map\` for the error type. It changes the string into a \`ConfigError\` and does not touch the success value. The program printed the same output before and after the fix. Thus only the type shows this problem. Without the fix, every caller of \`loadConfig\` must know that the file system fails with strings. With the fix, the low-level detail stays at the boundary, and callers can use \`catchTag("ConfigError", ...)\`.`
     },
     {
+      id: "error-management-c9",
+      title: "One error is not enough",
+      task: `The form check must report every empty field, but it reports only the first one. Change the function that runs \`check\` over the fields, so that the program prints \`invalid: name, age\`. Do not change \`check\`.`,
+      code: `import { Effect, Schema } from "effect"
+
+class Invalid extends Schema.TaggedError<Invalid>()("Invalid", { field: Schema.String }) {}
+
+const form: Record<string, string> = { name: "", email: "ada@example.com", age: "" }
+
+const check = (field: string): Effect.Effect<string, Invalid> =>
+  form[field] === "" ? Effect.fail(new Invalid({ field })) : Effect.succeed(form[field] ?? "")
+
+const report = Effect.forEach(["name", "email", "age"], check).pipe(
+  Effect.map(() => "form is valid"),
+  Effect.catch((e) => Effect.succeed("invalid: " + e.field))
+)
+
+console.log(Effect.runSync(report))
+`,
+      solution: `import { Effect, Schema } from "effect"
+
+class Invalid extends Schema.TaggedError<Invalid>()("Invalid", { field: Schema.String }) {}
+
+const form: Record<string, string> = { name: "", email: "ada@example.com", age: "" }
+
+const check = (field: string): Effect.Effect<string, Invalid> =>
+  form[field] === "" ? Effect.fail(new Invalid({ field })) : Effect.succeed(form[field] ?? "")
+
+const report = Effect.validate(["name", "email", "age"], check).pipe(
+  Effect.map(() => "form is valid"),
+  Effect.catch((errors) => Effect.succeed("invalid: " + errors.map((e) => e.field).join(", ")))
+)
+
+console.log(Effect.runSync(report))
+`,
+      expectedOutput: `invalid: name, age`,
+      hints: [
+        "Effect.forEach stops at the first failure. The check for age never runs.",
+        "The lesson about partition and validate has a function that runs every element and fails with all errors.",
+        "Use Effect.validate in place of Effect.forEach. The catch handler then receives an array of Invalid errors."
+      ],
+      explanation: `\`Effect.forEach\` stops at the first failure, so \`age\` was never checked. \`Effect.validate\` runs every element and collects every failure. Its error type is \`NonEmptyArray<Invalid>\`, so the \`catch\` handler receives an array and can join the field names. When every field is valid, \`validate\` succeeds with the array of values, in the same way as \`forEach\`. Use \`Effect.partition\` when the work must not fail at all and you want both lists.`
+    },
+    {
+      id: "error-management-c10",
+      title: "The failure that has no name",
+      task: `\`checkAmount\` declares that it fails with \`TooSmall\`, but the program does not compile. The output is already correct. Make the declaration true. Do not change the annotation, the test, or the output.`,
+      code: `import { Effect, Exit, Schema } from "effect"
+
+class TooSmall extends Schema.TaggedError<TooSmall>()("TooSmall", { amount: Schema.Number }) {}
+
+const checkAmount = (amount: number): Effect.Effect<number, TooSmall> =>
+  Effect.succeed(amount).pipe(
+    Effect.filterOrFail((n) => n >= 10)
+  )
+
+for (const amount of [25, 3]) {
+  const exit = Effect.runSyncExit(checkAmount(amount))
+  console.log(amount, Exit.isSuccess(exit) ? "accepted" : "rejected")
+}
+`,
+      solution: `import { Effect, Exit, Schema } from "effect"
+
+class TooSmall extends Schema.TaggedError<TooSmall>()("TooSmall", { amount: Schema.Number }) {}
+
+const checkAmount = (amount: number): Effect.Effect<number, TooSmall> =>
+  Effect.succeed(amount).pipe(
+    Effect.filterOrFail((n) => n >= 10, (n) => new TooSmall({ amount: n }))
+  )
+
+for (const amount of [25, 3]) {
+  const exit = Effect.runSyncExit(checkAmount(amount))
+  console.log(amount, Exit.isSuccess(exit) ? "accepted" : "rejected")
+}
+`,
+      expectedOutput: `25 accepted
+3 rejected`,
+      hints: [
+        "Read the type error. Which error type is in E, and which one does the annotation expect?",
+        "filterOrFail with one argument fails with NoSuchElementError. A second argument gives the error value.",
+        "Add (n) => new TooSmall({ amount: n }) as the second argument of filterOrFail."
+      ],
+      explanation: `With one argument, \`filterOrFail\` fails with \`NoSuchElementError\`. This type is not \`TooSmall\`, so the annotation is not true, and the compiler rejects the function. The output is the same before and after the fix. Only the type shows the problem. With the second argument, the effect fails with a \`TooSmall\` that holds the amount. Callers can then use \`catchTag("TooSmall", ...)\` and read \`e.amount\`. A \`NoSuchElementError\` says only that a test failed.`
+    },
+    {
       id: "error-management-c7",
       title: "Reasons stay wrapped",
       task: `The handlers in \`catchTags\` are written for the reasons, but the effect fails with the outer \`ApiError\`. Thus the handlers never match, and the program does not compile. Add one step before \`catchTags\` so that the program prints the 3 lines below.`,
@@ -830,7 +1047,7 @@ wait 30s
 need scope orders:read`,
       hints: [
         "What is in the error type of call(n)? Only ApiError. catchTags looks for tags in that type.",
-        "Lesson 7 has a function that replaces a parent error with its reasons.",
+        "Lesson 9 has a function that replaces a parent error with its reasons.",
         "Add Effect.unwrapReason(\"ApiError\") as the first step of the pipe."
       ],
       explanation: `\`catchTags\` matches the \`_tag\` of the error in \`E\`, and that tag is \`"ApiError"\`. The reason tags are one level down. \`unwrapReason("ApiError")\` moves them up: \`E\` becomes \`RateLimited | Unauthorized\`, and the \`catchTags\` keys match. Because the code catches both, \`E\` ends as \`never\`. The alternative that keeps the parent is \`catchReasons("ApiError", { ... })\`. Use \`unwrapReason\` when "which step failed" is no longer important and only "why" is important.`
@@ -881,7 +1098,7 @@ Effect.runSync(report("lang"))
 lang: NotFound`,
       hints: [
         "Effect.option changes a failure into None. Where did the NotFound value go?",
-        "The table in lesson 5 has a function related to option that keeps the error. It uses the Result type.",
+        "The table in lesson 7 has a function related to option that keeps the error. It uses the Result type.",
         "Use Effect.result, then Result.isSuccess(outcome) ? outcome.success : outcome.failure._tag."
       ],
       explanation: `\`Effect.option\` answers one question: did the effect succeed? It discards the error value. \`Effect.result\` keeps both sides as a \`Result<string, NotFound>\`. Thus the failure branch still has the typed error with its \`_tag\` and \`key\`. Use \`option\` when the reason is not important. Use \`result\` when the reason is important. Use \`exit\` when you also need to see defects and interrupts.`

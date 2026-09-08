@@ -168,13 +168,13 @@
     c.append(el("h1", {}, s.title, " ", anchor(s.id, "top")), el("p", { class: "summary" }, s.summary), md(s.intro))
 
     if (s.lessons.length) c.append(el("h2", { class: "part", id: "item-learn" }, "Learn ", anchor(s.id, "learn")))
-    for (const l of s.lessons) {
+    s.lessons.forEach((l, i) => {
       const item = el("div", { class: "item", id: "item-" + l.id })
       const block = codeBlock({ id: l.id, code: l.code, kind: "lesson" })
-      item.append(el("div", { class: "item-head" }, el("h3", {}, l.title, " ", anchor(s.id, l.id))), md(l.explain), block.wrap)
+      item.append(el("div", { class: "item-head" }, el("h3", {}, `Lesson ${i + 1}. ${l.title}`, " ", anchor(s.id, l.id))), md(l.explain), block.wrap)
       if (l.after) item.append(el("div", { class: "reveal" }, el("div", { class: "label" }, "Notice"), md(l.after)))
       c.append(item)
-    }
+    })
 
     if (s.dosAndDonts?.length) {
       c.append(el("h2", { class: "part", id: "item-do-dont" }, "Do and don't ", anchor(s.id, "do-dont")))

@@ -339,6 +339,69 @@ cached answer
 gave up after 3 attempts`,
       after: `Move \`Effect.timeout("2 millis")\` below \`Effect.retry({ times: 2 })\`. The 2 ms limit now applies to all attempts together. Effect interrupts the first attempt, and the count becomes 1. The functions are the same, but the order makes a different program.`
     }
+,
+    {
+      id: "scheduling-l7",
+      title: "Jitter and cron",
+      explain: `
+This lesson adds 2 tools: a random delay and a calendar.
+
+**Jitter.** 100 clients lose a connection at the same second. Each client retries with the same backoff. All 100 return at the same moment, and the server fails again. The name for this is a retry storm. \`Schedule.jittered\` multiplies each delay by a random factor between 0.8 and 1.2, so the clients spread out. Jitter changes only the delay. The number of attempts, the limit, and the output of the schedule stay the same. The program prints the attempt number from \`Schedule.tap\`, not the delay, because the delay is random.
+
+**Cron.** A cron expression describes points in time on a calendar, for example "02:00 every day". The \`Cron\` module parses and tests expressions. An expression has 6 fields: second, minute, hour, day of month, month, and day of week. Note: with 5 fields, the seconds field is 0. Give a time zone as the second argument. Without it, the expression uses the local time zone of the machine.
+
+| Function | Does | Returns |
+|---|---|---|
+| \`Cron.parse(text, tz)\` | parses the text | \`Result<Cron, CronParseError>\` |
+| \`Cron.parseUnsafe(text, tz)\` | parses the text | \`Cron\`, or it throws |
+| \`Cron.match(cron, date)\` | tests 1 date | \`boolean\` |
+| \`Cron.next(cron, date)\` | finds the first match after the date | \`Date\` |
+| \`Schedule.cron(cron)\` | makes a schedule from the cron | \`Schedule<Duration>\` |
+
+\`Schedule.cron\` reads the clock and waits until the next match. The delay depends on the real time, so the program does not run this schedule. It only shows that the schedule is a value. Give it to \`Effect.schedule\` in a real service.
+`,
+      code: `import { Cron, Effect, Ref, Result, Schedule } from "effect"
+
+// jittered: the schedule multiplies each delay by a random factor from 0.8 to 1.2
+const policy = Schedule.exponential("1 millis").pipe(
+  Schedule.upTo({ times: 3 }),
+  Schedule.jittered,
+  Schedule.tap((meta) => Effect.sync(() => console.log("retry", meta.attempt)))
+)
+
+const program = Effect.gen(function* () {
+  const attempts = yield* Ref.make(0)
+  const alwaysFails = Ref.update(attempts, (n) => n + 1).pipe(Effect.andThen(Effect.fail("down")))
+  const outcome = yield* alwaysFails.pipe(Effect.retry(policy), Effect.result)
+  console.log(outcome._tag, "after", yield* Ref.get(attempts), "attempts")
+
+  // cron: 6 fields = second minute hour day month weekday. Here: 02:00:00 every day, UTC.
+  const nightly = Cron.parseUnsafe("0 0 2 * * *", "UTC")
+  console.log("02:00 matches:", Cron.match(nightly, "2024-03-10T02:00:00Z"))
+  console.log("02:30 matches:", Cron.match(nightly, "2024-03-10T02:30:00Z"))
+  console.log("next after 10 Mar 05:00:", Cron.next(nightly, "2024-03-10T05:00:00Z").toISOString())
+
+  // A bad expression is a value too: parse returns a Result, it does not throw
+  console.log("parse '* * bad':", Result.isFailure(Cron.parse("* * bad")) ? "Failure" : "Success")
+
+  // Schedule.cron turns a Cron into a Schedule. Its delay is the time until the next match.
+  const nightlyPolicy = Schedule.cron(nightly)
+  console.log("schedule:", Schedule.isSchedule(nightlyPolicy))
+})
+
+Effect.runPromise(program)
+`,
+      expectedOutput: `retry 1
+retry 2
+retry 3
+Failure after 4 attempts
+02:00 matches: true
+02:30 matches: false
+next after 10 Mar 05:00: 2024-03-11T02:00:00.000Z
+parse '* * bad': Failure
+schedule: true`,
+      after: `Remove \`Schedule.jittered\`: the output is the same, because jitter changes only the delays. Change the expression to \`"0 30 2 * * 1-5"\`, which means 02:30 on Monday to Friday. The 10 March 2024 is a Sunday, so the next match is Monday 11 March at 02:30, and the 02:00 test becomes \`false\`.`
+    }
   ],
   dosAndDonts: [
     {
@@ -375,6 +438,11 @@ gave up after 3 attempts`,
       do: "Put \`Effect.timeout\` before \`Effect.retry\` in the pipe when each attempt needs its own time limit.",
       dont: "Do not put the timeout after the retry when each attempt needs its own time limit.",
       why: "A timeout after the retry applies to all attempts together, so Effect interrupts the first slow attempt and no retry happens."
+    },
+    {
+      do: "Test a cron expression with \`Cron.next\` on a fixed date before you give it to \`Schedule.cron\`.",
+      dont: "Do not count the fields of a cron expression from memory.",
+      why: "With 6 fields the first field is the second, so \`0 2 * * * *\` runs every hour at minute 2, not at 02:00."
     }
   ],
   challenges: [
@@ -713,6 +781,40 @@ Effect.runPromise(program)
       ],
       explanation: `\`while\` continues the repeat while the predicate is true. The first status is \`"pending"\`, so \`"pending" === "done"\` is false and the repeat stops at once. \`until\` is the opposite: continue **until** the predicate is true. Both options exist because each one reads well for a different condition. Pick the option that makes the sentence true. \`Effect.retry\` has the same pair of options for errors.`
     }
+,
+    {
+      id: "scheduling-c8",
+      title: "The report that ran every hour",
+      task: `The report must run 1 time per day, at 02:00 UTC. The program prints 2 runs that are 1 hour apart. Fix the cron expression. The program must print the next run as \`2024-03-11T02:00:00.000Z\` and the run after it as \`2024-03-12T02:00:00.000Z\`.`,
+      code: `import { Cron } from "effect"
+
+// The report must run once per day at 02:00 UTC
+const report = Cron.parseUnsafe("0 2 * * * *", "UTC")
+
+const start = "2024-03-10T05:00:00Z"
+const first = Cron.next(report, start)
+console.log("next run:", first.toISOString())
+console.log("after that:", Cron.next(report, first).toISOString())
+`,
+      solution: `import { Cron } from "effect"
+
+// The report must run once per day at 02:00 UTC
+const report = Cron.parseUnsafe("0 0 2 * * *", "UTC")
+
+const start = "2024-03-10T05:00:00Z"
+const first = Cron.next(report, start)
+console.log("next run:", first.toISOString())
+console.log("after that:", Cron.next(report, first).toISOString())
+`,
+      expectedOutput: `next run: 2024-03-11T02:00:00.000Z
+after that: 2024-03-12T02:00:00.000Z`,
+      hints: [
+        "Count the fields in the expression. Lesson 7 lists what each of the 6 fields means.",
+        "With 6 fields, the first field is the second, not the minute. \"0 2\" means second 0 and minute 2, and the hour field is *.",
+        "Write \"0 0 2 * * *\": second 0, minute 0, hour 2."
+      ],
+      explanation: `A 6-field expression starts with the seconds field. \`0 2 * * * *\` means second 0, minute 2, every hour, so the next match after 05:00 is 05:02. \`0 0 2 * * *\` means second 0, minute 0, hour 2, so it matches 1 time per day. The 5-field form \`0 2 * * *\` gives the same result, because the seconds field is 0 by default. Test an expression with \`Cron.next\` on a fixed date before you give it to \`Schedule.cron\`.`
+    }
   ],
   problems: [
     {
@@ -988,6 +1090,10 @@ attempts: 4`,
     {
       q: "`slow.pipe(Effect.retry({ times: 2 }), Effect.timeout(\"1 second\"))` and `slow.pipe(Effect.timeout(\"1 second\"), Effect.retry({ times: 2 }))`: what is the difference?",
       a: "In the first pipe, 1 time limit applies to all 3 attempts together. When the limit wins, Effect interrupts the full retry loop. In the second pipe, each attempt gets its own second. A slow attempt fails with `TimeoutError`, and `retry` runs the next attempt. For a time limit per attempt, put `timeout` inside `retry`."
+    },
+    {
+      q: "Why do you add `Schedule.jittered` to a retry policy, and what does it change in the output of a program?",
+      a: "Many clients that fail at the same time retry at the same time and overload the server again. `jittered` multiplies each delay by a random factor between 0.8 and 1.2, so the retries spread out. It changes only the delays. The number of attempts and the output of the schedule stay the same."
     }
   ]
 }

@@ -388,6 +388,332 @@ zip stops at the shorter [
       after: `\`zipWith\` with the infinite \`Stream.iterate(1, ...)\` is safe. \`zip\` stops when \`names\` ends, so it pulls only 3 elements from the infinite side. \`Stream.zipWithIndex\` does the same and adds the index for you.`
     },
     {
+      id: "stream-l8",
+      title: "Streams from the outside: fromQueue, fromPubSub, callback",
+      explain: `
+The streams so far had their data inside the program: an array, a range, a fake API. Real data comes from the outside: a worker fiber, an event bus, a library that calls your function. 3 constructors connect these sources to a stream.
+
+| Constructor | Source | How the stream ends |
+|---|---|---|
+| \`Stream.fromQueue(queue)\` | A \`Queue<A, Cause.Done>\`. Any fiber can offer elements. | \`Queue.end(queue)\` |
+| \`Stream.fromSubscription(sub)\` | A PubSub subscription. Each subscriber gets each message. | \`Stream.take\`, or the end of the scope |
+| \`Stream.fromPubSub(pubsub)\` | The same, but the stream subscribes when it starts | The same |
+| \`Stream.callback((queue) => setup)\` | A library with callbacks. \`setup\` registers the callbacks and pushes into the queue. | \`Queue.endUnsafe(queue)\` from a callback |
+
+A queue is the bridge between a producer fiber and a stream. The producer offers elements and then ends the queue. \`Stream.fromQueue\` needs the queue error type \`Cause.Done\`, because the end signal travels in the error channel. A bounded queue gives backpressure: \`Queue.offer\` waits while the queue is full.
+
+A PubSub sends each message to all subscribers. A subscription exists only after \`PubSub.subscribe\`, and this needs a scope. A message that the program publishes before the subscribe does not reach the subscriber. Subscribe first, then publish. Note: \`PubSub.shutdown\` discards the messages that a subscriber has not read yet.
+
+\`Stream.callback\` gives you a queue and expects a setup effect. The setup effect runs when the stream starts. Use \`Effect.acquireRelease\` inside it: the acquire registers the callbacks, and the release removes them. The release runs when the stream ends, for any reason. From a plain callback, use \`Queue.offerUnsafe\` and \`Queue.endUnsafe\`, because a callback cannot yield an effect.
+`,
+      code: `import { Cause, Effect, PubSub, Queue, Stream } from "effect"
+
+// A fake event source. It calls onEvent 3 times, 1 ms apart, then it calls onDone.
+// The returned function stops the source. Most event emitters have this shape.
+const listen = (onEvent: (n: number) => void, onDone: () => void) => {
+  let count = 0
+  const timer = setInterval(() => {
+    count++
+    onEvent(count)
+    if (count === 3) {
+      clearInterval(timer)
+      onDone()
+    }
+  }, 1)
+  return () => {
+    clearInterval(timer)
+    console.log("listener removed")
+  }
+}
+
+// Stream.callback gives you a queue. Push into it from plain callbacks. End it when the source is done.
+const events = Stream.callback<number>((queue) =>
+  Effect.acquireRelease(
+    Effect.sync(() => listen((n) => Queue.offerUnsafe(queue, n), () => Queue.endUnsafe(queue))),
+    (stop) => Effect.sync(stop)                  // runs when the stream ends, also after take
+  )
+)
+
+const program = Effect.gen(function* () {
+  // 1. A queue. A producer fiber offers, then ends. The stream ends with the queue.
+  const queue = yield* Queue.bounded<string, Cause.Done>(2)
+  yield* Effect.forkChild(Effect.gen(function* () {
+    yield* Queue.offerAll(queue, ["job-1", "job-2", "job-3", "job-4"])   // waits while the queue is full
+    yield* Queue.end(queue)
+    console.log("producer ended")
+  }))
+  console.log("queue", yield* Stream.runCollect(Stream.fromQueue(queue)))
+
+  // 2. A PubSub. Subscribe first, in a scope. Then publish. Each subscriber gets each message.
+  const pubsub = yield* PubSub.unbounded<string>()
+  const seen = yield* Effect.scoped(Effect.gen(function* () {
+    const subscription = yield* PubSub.subscribe(pubsub)     // removed when the scope closes
+    yield* PubSub.publishAll(pubsub, ["login", "click", "logout"])
+    return yield* Stream.fromSubscription(subscription).pipe(Stream.take(3), Stream.runCollect)
+  }))
+  console.log("pubsub", seen)
+
+  // 3. A callback source. The release runs in both cases.
+  console.log("callback", yield* Stream.runCollect(events))
+  console.log("callback take 2", yield* events.pipe(Stream.take(2), Stream.runCollect))
+})
+
+Effect.runPromise(program)
+`,
+      expectedOutput: `producer ended
+queue [ "job-1", "job-2", "job-3", "job-4" ]
+pubsub [ "login", "click", "logout" ]
+listener removed
+callback [ 1, 2, 3 ]
+listener removed
+callback take 2 [ 1, 2 ]`,
+      after: `The "listener removed" line prints also after \`take(2)\`. The release effect runs when the consumer stops, and the third event never fires. Change \`Queue.bounded(2)\` to \`Queue.unbounded()\`. The output is the same, but the producer no longer waits. Remove \`Stream.take(3)\` from the PubSub example. Caution: the subscription never ends by itself, and the program does not stop.`
+    },
+    {
+      id: "stream-l9",
+      title: "Resource safety in streams: acquireRelease, ensuring, scoped",
+      explain: `
+A stream often reads from a resource: a file, a socket, a database cursor. The resource must open when the stream starts. It must close when the stream ends. This includes 3 cases: the stream emits its last element, a \`take\` stops it early, or a step fails.
+
+In plain TypeScript with \`for await\`, the generator must close the resource in a \`finally\` block. If the caller uses \`break\`, the generator runs the \`finally\` only when the loop calls \`return()\`. Many callers forget this.
+
+In Effect, \`Effect.acquireRelease(open, close)\` pairs an open with a close. This effect needs a \`Scope\`. \`Stream.scoped\` gives the stream its own scope for each run. The scope closes when the run ends, in all 3 cases.
+
+| Function | When it runs | Use when |
+|---|---|---|
+| \`Stream.scoped(Stream.fromEffect(acquireRelease))\` | The close runs when the run ends, in all cases | The stream owns a resource |
+| \`Stream.unwrap(effect)\` | The same. \`effect\` returns the stream and can use a scope. | You must open the resource to know what to emit |
+| \`Stream.ensuring(finalizer)\` | After the finalizers of the stream, in all cases | Cleanup that does not own a resource, for example a log |
+| \`Stream.onEnd(effect)\` | Only when the stream emits its last element | A "done" message |
+| \`Stream.onExit((exit) => ...)\` | In all cases, with the \`Exit\` | You must know why the stream ended |
+
+The example runs the same stream 3 times: a complete run, a run with \`take(2)\`, and a run that fails at line 3. Compare the lines that print. "close" prints in all 3 runs. "onEnd" prints only in the first run.
+`,
+      code: `import { Effect, Stream } from "effect"
+
+// A fake file. acquireRelease pairs the open with the close.
+const openFile = (name: string) =>
+  Effect.acquireRelease(
+    Effect.sync(() => {
+      console.log("open", name)
+      return ["l1", "l2", "l3", "l4"]
+    }),
+    () => Effect.sync(() => console.log("close", name))
+  )
+
+// Stream.scoped: the resource lives as long as 1 run of the stream
+const lines = Stream.scoped(Stream.fromEffect(openFile("a.txt"))).pipe(
+  Stream.flatMap((all) => Stream.fromIterable(all)),
+  Stream.tap((line) => Effect.sync(() => console.log("read", line))),
+  Stream.ensuring(Effect.sync(() => console.log("ensuring: always"))),
+  Stream.onEnd(Effect.sync(() => console.log("onEnd: only after a complete run")))
+)
+
+const program = Effect.gen(function* () {
+  console.log("--- complete run")
+  console.log(yield* Stream.runCollect(lines))
+
+  console.log("--- take(2) stops the stream early")
+  console.log(yield* lines.pipe(Stream.take(2), Stream.runCollect))
+
+  console.log("--- a failure in the middle")
+  const result = yield* lines.pipe(
+    Stream.mapEffect((line) => line === "l3" ? Effect.fail("bad " + line) : Effect.succeed(line)),
+    Stream.runCollect,
+    Effect.catch((e) => Effect.succeed("failed: " + e))
+  )
+  console.log(result)
+})
+
+Effect.runPromise(program)
+`,
+      expectedOutput: `--- complete run
+open a.txt
+read l1
+read l2
+read l3
+read l4
+close a.txt
+ensuring: always
+onEnd: only after a complete run
+[ "l1", "l2", "l3", "l4" ]
+--- take(2) stops the stream early
+open a.txt
+read l1
+read l2
+close a.txt
+ensuring: always
+[ "l1", "l2" ]
+--- a failure in the middle
+open a.txt
+read l1
+read l2
+read l3
+close a.txt
+ensuring: always
+failed: bad l3`,
+      after: `The order is fixed: the close of the resource, then \`ensuring\`, then \`onEnd\`. Remove \`Stream.scoped\`. The program no longer compiles, because \`Scope\` stays in the \`R\` of the stream. The challenge "The file that closes too late" shows what happens when the caller provides that scope. Replace \`Stream.onEnd\` with \`Stream.onExit\` and print \`exit._tag\` in each of the 3 runs.`
+    },
+    {
+      id: "stream-l10",
+      title: "Group, buffer, broadcast",
+      explain: `
+These functions change the shape of the flow. They do not change the elements.
+
+| Function | What it does | Use when |
+|---|---|---|
+| \`Stream.groupByKey(f)\` | Emits \`[key, substream]\` for each distinct key | Totals for each customer, files for each day |
+| \`Stream.buffer({ capacity })\` | Puts a queue between the producer and the consumer | A fast producer and a slow consumer |
+| \`Stream.broadcast(options)\` | 1 source, many consumers. Each consumer sees each element. | 2 reports from 1 read of the data |
+| \`Stream.changes\` | Drops an element that is equal to the previous element | Status changes, not status reports |
+| \`Stream.scan(init, f)\` | Emits each intermediate state (lesson 2) | A running total |
+
+\`groupByKey\` emits a stream for each key. The groups fill at the same time, while the source runs. The step that reads the groups must run with \`concurrency\`. A group that nobody reads blocks the source. Caution: without \`concurrency\`, the program never ends. The output order is the order of the first element of each key.
+
+Without a buffer, the producer and the consumer take turns. The producer makes 1 element, then the consumer processes it. \`buffer\` lets the producer run ahead, up to \`capacity\` elements. When the buffer is full, the producer waits. This is the same backpressure as a bounded queue.
+
+\`broadcast\` returns an effect that needs a \`Scope\`, because it starts a PubSub. Run the consumers at the same time with \`Effect.all\` and \`concurrency\`. Each consumer subscribes when it starts, and the source runs 1 time.
+`,
+      code: `import { Effect, Stream } from "effect"
+
+const orders = Stream.make(
+  { city: "cairo", total: 10 },
+  { city: "oslo", total: 5 },
+  { city: "cairo", total: 7 },
+  { city: "lima", total: 3 },
+  { city: "oslo", total: 1 }
+)
+
+const program = Effect.gen(function* () {
+  // groupByKey: 1 substream for each key. Reduce each substream to 1 value.
+  // The groups fill at the same time, so the step that reads them must run with concurrency.
+  const perCity = yield* orders.pipe(
+    Stream.groupByKey((order) => order.city),
+    Stream.mapEffect(
+      ([city, group]) =>
+        Stream.runFold(group, () => 0, (sum, order) => sum + order.total).pipe(
+          Effect.map((sum) => city + "=" + sum)
+        ),
+      { concurrency: "unbounded" }
+    ),
+    Stream.runCollect
+  )
+  console.log("groupByKey", perCity)
+
+  // buffer: the producer runs ahead of the consumer, up to the capacity
+  const produce = (label: string) =>
+    Stream.range(1, 3).pipe(
+      Stream.rechunk(1),                    // 1 element for each chunk, so each element is 1 step
+      Stream.tap((n) => Effect.sync(() => console.log(label, "produced", n)))
+    )
+  const consume = (label: string) =>
+    Stream.runForEach((n: number) => Effect.sync(() => console.log(label, "consumed", n)))
+  yield* produce("plain").pipe(consume("plain"))
+  yield* produce("buffer").pipe(Stream.buffer({ capacity: 4 }), consume("buffer"))
+
+  // broadcast: 1 source, 2 consumers, each consumer sees each element. It needs a scope.
+  const [sum, max] = yield* Effect.scoped(Effect.gen(function* () {
+    const shared = yield* Stream.broadcast(Stream.make(3, 1, 4, 1, 5), { capacity: 8 })
+    return yield* Effect.all([
+      Stream.runFold(shared, () => 0, (a, b) => a + b),
+      Stream.runFold(shared, () => 0, (a, b) => Math.max(a, b))
+    ], { concurrency: "unbounded" })
+  }))
+  console.log("broadcast sum", sum, "max", max)
+
+  // changes: drop an element that is equal to the previous element
+  const status = Stream.make("ok", "ok", "down", "down", "down", "ok")
+  console.log("changes", yield* status.pipe(Stream.changes, Stream.runCollect))
+})
+
+Effect.runPromise(program)
+`,
+      expectedOutput: `groupByKey [ "cairo=17", "oslo=6", "lima=3" ]
+plain produced 1
+plain consumed 1
+plain produced 2
+plain consumed 2
+plain produced 3
+plain consumed 3
+buffer produced 1
+buffer produced 2
+buffer produced 3
+buffer consumed 1
+buffer consumed 2
+buffer consumed 3
+broadcast sum 14 max 5
+changes [ "ok", "down", "ok" ]`,
+      after: `Compare the "plain" lines with the "buffer" lines. With the buffer, all 3 "produced" lines come before the first "consumed" line. Change the capacity to 1 and compare again. Add an order for a new city at the end of \`orders\`. The new key appears at the end of the \`groupByKey\` output. Note: \`Stream.changes\` compares with \`Equal.equals\`, so it also works for structural data such as \`Data.struct\`.`
+    },
+    {
+      id: "stream-l11",
+      title: "Time-based operators with TestClock",
+      explain: `
+Some functions depend on time: \`throttle\`, \`debounce\`, \`timeout\`. A test must not wait for real seconds. Effect reads the time from the \`Clock\` service. \`TestClock\` from \`effect/testing\` is a fake clock. \`TestClock.layer()\` provides it. \`TestClock.adjust(duration)\` moves the clock forward and runs each timer that is now due. No real time passes.
+
+| Function | What it does | Use when |
+|---|---|---|
+| \`Stream.throttle({ cost, units, duration })\` | Lets \`units\` of cost through in each \`duration\`. The next chunk waits. | A rate limit for an API |
+| \`Stream.debounce(duration)\` | Emits the last element when the input is quiet for \`duration\` | A search box |
+| \`Stream.timeout(duration)\` | Ends the stream when no element arrives in \`duration\` | A source that can stop without a signal |
+| \`Stream.schedule(schedule)\` | Waits for 1 schedule step before each element | A slow replay of events |
+
+The pattern is the same for each function. Fork the stream, because it waits for the clock. Move the clock with \`TestClock.adjust\`. Join the fiber with \`Fiber.join\` to get the result. Note: in v4, a fiber is not an effect. \`yield* fiber\` does not compile. Use \`Fiber.join(fiber)\`.
+
+\`throttle\` works on chunks, not on elements. \`Stream.range\` emits 1 chunk, so the example adds \`Stream.rechunk(1)\` before the throttle. Without it, the throttle sees 1 chunk with a cost of 3. The cost is above \`units\`, and the chunk never passes. The example prints the clock time for each element. The times are exact, because the clock is fake.
+`,
+      code: `import { Cause, Clock, Effect, Fiber, Queue, Stream } from "effect"
+import { TestClock } from "effect/testing"
+
+// Prints the element with the test-clock time. The time is exact, because the clock is fake.
+const stamp = <A>(label: string) => (a: A) =>
+  Effect.map(Clock.currentTimeMillis, (ms) => label + " " + ms + "ms " + a)
+
+const program = Effect.gen(function* () {
+  // throttle: at most 1 element for each second
+  const throttled = yield* Effect.forkChild(
+    Stream.range(1, 3).pipe(
+      Stream.rechunk(1),                                      // throttle counts chunks, so make each element a chunk
+      Stream.throttle({ cost: (chunk) => chunk.length, units: 1, duration: "1 second" }),
+      Stream.mapEffect(stamp("throttle")),
+      Stream.runCollect
+    )
+  )
+  yield* TestClock.adjust("2 seconds")                        // the fake clock moves 2 seconds at once
+  console.log(yield* Fiber.join(throttled))
+
+  // debounce: emit only when the input is quiet for 100 ms
+  const keys = yield* Queue.unbounded<string, Cause.Done>()
+  const debounced = yield* Effect.forkChild(
+    Stream.fromQueue(keys).pipe(Stream.debounce("100 millis"), Stream.runCollect)
+  )
+  yield* Queue.offerAll(keys, ["k", "ke", "key"])              // 3 keystrokes, no pause
+  yield* TestClock.adjust("100 millis")                       // a pause
+  yield* Queue.offerAll(keys, ["keyb", "keybo"])
+  yield* TestClock.adjust("100 millis")
+  yield* Queue.end(keys)
+  console.log("debounce", yield* Fiber.join(debounced))
+
+  // timeout: end the stream when no element arrives in 1 second
+  const pings = yield* Queue.unbounded<string, Cause.Done>()
+  const guarded = yield* Effect.forkChild(
+    Stream.fromQueue(pings).pipe(Stream.timeout("1 second"), Stream.runCollect)
+  )
+  yield* Queue.offer(pings, "ping")
+  yield* TestClock.adjust("500 millis")
+  yield* Queue.offer(pings, "pong")
+  yield* TestClock.adjust("1 second")                         // nothing arrives: the stream ends. The queue never ends.
+  console.log("timeout", yield* Fiber.join(guarded))
+}).pipe(Effect.provide(TestClock.layer()))
+
+Effect.runPromise(program)
+`,
+      expectedOutput: `[ "throttle 0ms 1", "throttle 1000ms 2", "throttle 2000ms 3" ]
+debounce [ "key", "keybo" ]
+timeout [ "ping", "pong" ]`,
+      after: `Change the throttle duration to \`"500 millis"\`. The times become 0, 500 and 1000. Change \`TestClock.adjust("2 seconds")\` to \`"1 second"\`. Caution: the program then never ends, because the third element waits for a second that never comes. Remove \`Effect.provide(TestClock.layer())\`. The program still works, but it waits for real seconds. This is the reason to use the fake clock in tests.`
+    },
+    {
       id: "stream-l7",
       title: "Errors in streams: catch, catchTag, retry",
       explain: `
@@ -479,6 +805,11 @@ Effect.runPromise(program)
       do: "Catch the error inside the `mapEffect` function with `Effect.catch` when each element must recover.",
       dont: "Do not use `Stream.catch` when the stream must continue after a bad element.",
       why: "A failure ends the stream, and `Stream.catch` replaces the rest of the stream, not the 1 element that failed."
+    },
+    {
+      do: "Give a stream its own resource scope with `Stream.scoped` or `Stream.unwrap`.",
+      dont: "Do not put `Effect.acquireRelease` in `Stream.fromEffect` and provide the scope with `Effect.scoped` around the program.",
+      why: "The resource closes when the program ends, not when the stream ends, and a `take` keeps the resource open."
     }
   ],
   challenges: [
@@ -734,10 +1065,153 @@ Effect.runPromise(Stream.runCollect(parseAll(["10", "20", "30"]))).then((xs) => 
       expectedOutput: `[ 10, 20, 30 ]`,
       hints: [
         "Stream.Stream<number> is short for Stream<number, never, never>. Which step adds a string to the error slot?",
-        "Lesson 7: a catch function on a stream returns a stream that continues after the failure. Which stream emits nothing?",
+        "Lesson 11: a catch function on a stream returns a stream that continues after the failure. Which stream emits nothing?",
         "Add Stream.catch(() => Stream.empty) after the mapEffect."
       ],
       explanation: `This error is not visible at run time with clean input. The program prints the correct result. The compiler still rejects the program, because \`Effect.try\` put \`string\` into the error channel and the annotation promised \`never\`. \`Stream.catch\` removes the error from \`E\` and makes the annotation true. It also makes you decide now what a bad line means. Here, the stream stops. Without types, the first caller that crashes makes this decision.`
+    },
+    {
+      id: "stream-c8",
+      title: "The queue that cannot end",
+      task: `A producer fiber offers 3 jobs into a queue and ends the queue. The output is correct, but the program does not compile. Change the type arguments of the queue only.`,
+      code: `import { Effect, Queue, Stream } from "effect"
+
+const program = Effect.gen(function* () {
+  const queue = yield* Queue.unbounded<string>()
+
+  yield* Effect.forkChild(Effect.gen(function* () {
+    yield* Queue.offerAll(queue, ["job-1", "job-2", "job-3"])
+    yield* Queue.end(queue)
+  }))
+
+  const jobs = yield* Stream.runCollect(Stream.fromQueue(queue))
+  console.log(jobs)
+})
+
+Effect.runPromise(program)
+`,
+      solution: `import { Cause, Effect, Queue, Stream } from "effect"
+
+const program = Effect.gen(function* () {
+  const queue = yield* Queue.unbounded<string, Cause.Done>()
+
+  yield* Effect.forkChild(Effect.gen(function* () {
+    yield* Queue.offerAll(queue, ["job-1", "job-2", "job-3"])
+    yield* Queue.end(queue)
+  }))
+
+  const jobs = yield* Stream.runCollect(Stream.fromQueue(queue))
+  console.log(jobs)
+})
+
+Effect.runPromise(program)
+`,
+      expectedOutput: `[ "job-1", "job-2", "job-3" ]`,
+      hints: [
+        "Read the type error on Queue.end. It expects a queue whose error type includes Done.",
+        "The lesson \"Streams from the outside\" says where the end signal of a queue travels.",
+        "Write Queue.unbounded<string, Cause.Done>() and import Cause."
+      ],
+      explanation: `\`Queue.end\` puts a \`Done\` value into the error channel of the queue. A \`Queue<string, never>\` has no room for it, so the compiler rejects the call. At run time the queue ends without a problem, and the output is correct. The type still matters. \`Stream.fromQueue\` removes \`Done\` from the error type of the stream. With the correct type, the compiler knows that the queue can end, and the stream type stays \`Stream<string>\`.`
+    },
+    {
+      id: "stream-c9",
+      title: "The file that closes too late",
+      task: `The stream reads 2 lines of a file. The file must close before "next task" prints. The program compiles and runs, but the close comes too late. Change the definition of \`lines\` only.`,
+      code: `import { Effect, Stream } from "effect"
+
+const openFile = Effect.acquireRelease(
+  Effect.sync(() => {
+    console.log("open")
+    return ["l1", "l2", "l3"]
+  }),
+  () => Effect.sync(() => console.log("close"))
+)
+
+const lines = Stream.fromEffect(openFile).pipe(
+  Stream.flatMap((all) => Stream.fromIterable(all))
+)
+
+const program = Effect.gen(function* () {
+  console.log(yield* lines.pipe(Stream.take(2), Stream.runCollect))
+  console.log("next task")
+})
+
+Effect.runPromise(Effect.scoped(program))
+`,
+      solution: `import { Effect, Stream } from "effect"
+
+const openFile = Effect.acquireRelease(
+  Effect.sync(() => {
+    console.log("open")
+    return ["l1", "l2", "l3"]
+  }),
+  () => Effect.sync(() => console.log("close"))
+)
+
+const lines = Stream.scoped(Stream.fromEffect(openFile)).pipe(
+  Stream.flatMap((all) => Stream.fromIterable(all))
+)
+
+const program = Effect.gen(function* () {
+  console.log(yield* lines.pipe(Stream.take(2), Stream.runCollect))
+  console.log("next task")
+})
+
+Effect.runPromise(Effect.scoped(program))
+`,
+      expectedOutput: `open
+close
+[ "l1", "l2" ]
+next task`,
+      hints: [
+        "Which scope owns the file now? Look at the Effect.scoped on the last line.",
+        "The lesson \"Resource safety in streams\" gives the stream its own scope for each run.",
+        "Wrap Stream.fromEffect(openFile) in Stream.scoped(...)."
+      ],
+      explanation: `\`Stream.fromEffect(openFile)\` leaves \`Scope\` in the \`R\` of the stream. The \`Effect.scoped\` on the last line provides that scope. The file then closes when the whole program ends, after "next task". \`Stream.scoped\` gives the stream its own scope for each run. The scope closes when the run ends, so the close comes directly after \`take(2)\`, before the result prints. The \`Effect.scoped\` on the last line is now not necessary, but it does no harm.`
+    },
+    {
+      id: "stream-c10",
+      title: "broadcast needs a scope",
+      task: `2 reports read 1 broadcast stream. The program does not compile. Do not change the reports. Make the program provide what \`Stream.broadcast\` needs.`,
+      code: `import { Effect, Stream } from "effect"
+
+const program = Effect.gen(function* () {
+  const shared = yield* Stream.broadcast(Stream.make(3, 1, 4), { capacity: 8 })
+
+  const [sum, max] = yield* Effect.all([
+    Stream.runFold(shared, () => 0, (a, b) => a + b),
+    Stream.runFold(shared, () => 0, (a, b) => Math.max(a, b))
+  ], { concurrency: "unbounded" })
+
+  console.log("sum", sum, "max", max)
+})
+
+Effect.runPromise(program)
+`,
+      solution: `import { Effect, Stream } from "effect"
+
+const program = Effect.gen(function* () {
+  const shared = yield* Stream.broadcast(Stream.make(3, 1, 4), { capacity: 8 })
+
+  const [sum, max] = yield* Effect.all([
+    Stream.runFold(shared, () => 0, (a, b) => a + b),
+    Stream.runFold(shared, () => 0, (a, b) => Math.max(a, b))
+  ], { concurrency: "unbounded" })
+
+  console.log("sum", sum, "max", max)
+})
+
+Effect.runPromise(Effect.scoped(program))
+`,
+      expectedOutput: `sum 8 max 4`,
+      hints: [
+        "Read the type error on the last line. Which service is in the R of program?",
+        "Stream.broadcast starts a PubSub, so it returns an effect that needs a Scope. The lesson \"Group, buffer, broadcast\" shows where the scope comes from.",
+        "Wrap program in Effect.scoped before you run it."
+      ],
+      explanation: `\`Stream.broadcast\` returns \`Effect<Stream<A>, never, Scope>\`. The PubSub that it starts must stop at some point, and the scope decides when. Without a scope, the type \`Effect<void, never, Scope>\` does not match the \`never\` that \`Effect.runPromise\` expects. \`Effect.scoped\` makes a scope, runs the program inside it, and closes the scope at the end. The compiler found the absent scope before the program ran. At run time, the absent service is a defect.`
     }
   ],
   problems: [
@@ -1017,6 +1491,10 @@ avg 28.3`,
     {
       q: "A stream fails in the middle. What does `Stream.catchTag(\"Tag\", (e) => Stream.make(x))` do with the elements after the failure?",
       a: "They are lost. The failure ends the original stream, and the replacement stream continues from that point. For recovery of each element, catch the error inside the `mapEffect` function. The stream then never fails."
+    },
+    {
+      q: "A library gives you events through `on(callback)` and `off()`. Which constructor makes a stream from it?",
+      a: "`Stream.callback((queue) => Effect.acquireRelease(register, remove))`. Push with `Queue.offerUnsafe(queue, x)` from the callback, and end with `Queue.endUnsafe(queue)`. The release removes the callback when the stream ends, also after a `take`."
     }
   ]
 }
