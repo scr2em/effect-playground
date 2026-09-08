@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 /**
  * src/client/CodeRunner.tsx: the playground widget against a fake runtime bridge.
- * The bridge module is mocked so no Monaco / worker code loads; the fake editor keeps its value
+ * The bridge module is mocked so no CodeMirror / worker code loads; the fake editor keeps its value
  * in memory and records setValue / setDiagnostics / dispose calls.
  */
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react"
@@ -36,7 +36,7 @@ const fake = vi.hoisted(() => {
         options,
         change: (v) => { editor.value = v; listeners.forEach((cb) => cb(v)) },
         getValue: () => editor.value,
-        // Mirrors Monaco/the stub: programmatic setValue also fires change listeners.
+        // Mirrors CodeMirror/the stub: programmatic setValue also fires change listeners.
         setValue: vi.fn((code: string) => { editor.value = code; listeners.forEach((cb) => cb(code)) }),
         setDiagnostics: vi.fn(),
         onChange: (cb) => { listeners.push(cb) },

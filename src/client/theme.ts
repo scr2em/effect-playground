@@ -3,7 +3,7 @@
  * `effect-playground:theme` ("light" | "dark"; absent = system). The resolved theme is applied on
  * <html> as the StyleX light theme class (src/styles/themes.stylex.ts), `data-theme`, and
  * `color-scheme`; `effect-playground:theme` is dispatched on document with the resolved theme so
- * other modules (the Monaco editor) can follow. Base.astro inlines the same logic in <head> to
+ * other modules (the CodeMirror editor) can follow. Base.astro inlines the same logic in <head> to
  * paint the right theme before this module loads.
  */
 import * as stylex from "@stylexjs/stylex"

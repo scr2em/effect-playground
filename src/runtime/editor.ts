@@ -1,29 +1,31 @@
 /**
- * Interface 3 (ARCHITECTURE.md): Monaco editor factory. Monaco is loaded lazily from the npm
- * package through Vite on the first createEditor call. TypeScript syntax highlighting comes from
- * Monaco's Monarch tokenizer (basic-languages); Monaco's own TypeScript worker is NOT loaded:
- * semantic diagnostics arrive through setDiagnostics from the runtime (client.ts). Monaco's
- * stylesheet is the ESM modules' own CSS imports, bundled by Vite; no hand-written CSS here.
- * Theme: "playground" (dark) / "playground-light", following html[data-theme] and the
+ * Interface 3 (ARCHITECTURE.md): CodeMirror 6 editor factory. CodeMirror renders the document as
+ * real DOM text in a contenteditable, so mouse clicks land where the browser puts the caret
+ * (native hit-testing) instead of relying on font measurement. Syntax highlighting comes from
+ * `@codemirror/lang-javascript` (TypeScript dialect); semantic diagnostics arrive through
+ * setDiagnostics from the runtime (client.ts) and are shown as lint marks + gutter markers.
+ * Theme: dark (one-dark based) / light (custom), following html[data-theme] and the
  * `effect-playground:theme` event dispatched by src/client/theme.ts (setEditorTheme switches all editors).
  */
+import { Compartment, EditorState, Prec } from "@codemirror/state"
+import {
+  EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection,
+  highlightSpecialChars, rectangularSelection, crosshairCursor
+} from "@codemirror/view"
+import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands"
+import { bracketMatching, indentOnInput, indentUnit, syntaxHighlighting, HighlightStyle } from "@codemirror/language"
+import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete"
+import { searchKeymap, highlightSelectionMatches } from "@codemirror/search"
+import { javascript } from "@codemirror/lang-javascript"
+import { lintGutter, setDiagnostics as setLintDiagnostics, type Diagnostic as LintDiagnostic } from "@codemirror/lint"
+import { oneDark } from "@codemirror/theme-one-dark"
+import { tags } from "@lezer/highlight"
 import type { Diagnostic } from "./types.ts"
 
 export type EditorTheme = "light" | "dark"
 const THEME_EVENT = "effect-playground:theme"
-const themeName = (t: EditorTheme) => (t === "light" ? "playground-light" : "playground")
 let currentTheme: EditorTheme = typeof document !== "undefined" && document.documentElement.dataset.theme === "light" ? "light" : "dark"
-let loaded: Monaco | undefined
-
-/** Switches every editor on the page (Monaco themes are global). */
-export function setEditorTheme(theme: EditorTheme): void {
-  currentTheme = theme
-  loaded?.editor.setTheme(themeName(theme))
-}
-
-if (typeof document !== "undefined") {
-  document.addEventListener(THEME_EVENT, (e) => setEditorTheme((e as CustomEvent<string>).detail === "light" ? "light" : "dark"))
-}
+const editors = new Set<{ view: EditorView; theme: Compartment }>()
 
 export interface EditorHandle {
   getValue(): string
@@ -35,69 +37,77 @@ export interface EditorHandle {
   dispose(): void
 }
 
-type Monaco = typeof import("monaco-editor/esm/vs/editor/editor.api")
+// Shared chrome (both themes): font, fill the mount, scroll inside the editor. CodeMirror lets the
+// wheel through to the page once the scroller is at its start/end, so no overscroll rules.
+const baseTheme = EditorView.theme({
+  "&": { height: "100%", fontSize: "13px" },
+  ".cm-scroller": { overflow: "auto", fontFamily: "Menlo, Monaco, 'Courier New', monospace", lineHeight: "1.5" },
+  ".cm-content": { padding: "8px 0" },
+  ".cm-gutters": { borderRight: "none" },
+  ".cm-lineNumbers .cm-gutterElement": { paddingLeft: "12px", paddingRight: "8px", minWidth: "36px" },
+  "&.cm-focused": { outline: "none" }
+})
 
-let monacoPromise: Promise<Monaco> | undefined
-let counter = 0
+// Dark: one-dark with the site's `codeBg` token (src/styles/tokens.stylex.ts) as background.
+// The override is listed first: CodeMirror gives earlier (higher-precedence) theme extensions the
+// later position in the style sheet, so listed after oneDark it would lose to one-dark's `#282c34`.
+const darkTheme = [
+  EditorView.theme({
+    "&": { backgroundColor: "#0b0d12" },
+    ".cm-gutters": { backgroundColor: "#0b0d12" },
+    ".cm-activeLine": { backgroundColor: "#12151c" },
+    ".cm-activeLineGutter": { backgroundColor: "#12151c" }
+  }, { dark: true }),
+  oneDark
+]
 
-function loadMonaco(): Promise<Monaco> {
-  monacoPromise ??= (async () => {
-    const [{ default: EditorWorker }, monaco] = await Promise.all([
-      import("monaco-editor/esm/vs/editor/editor.worker?worker"),
-      import("monaco-editor/esm/vs/editor/editor.api"),
-      import("monaco-editor/esm/vs/editor/editor.all"),
-      import("monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution")
-    ])
-    ;(self as { MonacoEnvironment?: unknown }).MonacoEnvironment = { getWorker: () => new EditorWorker() }
-    monaco.editor.defineTheme("playground", {
-      base: "vs-dark",
-      inherit: true,
-      rules: [
-        { token: "comment", foreground: "6b7280", fontStyle: "italic" },
-        { token: "keyword", foreground: "c792ea" },
-        { token: "string", foreground: "9ece6a" },
-        { token: "number", foreground: "ff9e64" },
-        { token: "type", foreground: "7dcfff" },
-        { token: "identifier", foreground: "d4d4d8" }
-      ],
-      colors: {
-        "editor.background": "#0b0d12",
-        "editor.foreground": "#d4d4d8",
-        "editor.lineHighlightBackground": "#12151c",
-        "editorLineNumber.foreground": "#3f4552",
-        "editorGutter.background": "#0b0d12",
-        "editor.selectionBackground": "#264f78",
-        "editorIndentGuide.background": "#1c2029",
-        "scrollbarSlider.background": "#2a2f3a80"
-      }
-    })
-    // Light counterpart; background = the light `codeBg` token (src/styles/themes.stylex.ts).
-    monaco.editor.defineTheme("playground-light", {
-      base: "vs",
-      inherit: true,
-      rules: [
-        { token: "comment", foreground: "6b7280", fontStyle: "italic" },
-        { token: "keyword", foreground: "7c3aed" },
-        { token: "string", foreground: "15803d" },
-        { token: "number", foreground: "c2410c" },
-        { token: "type", foreground: "0e7490" },
-        { token: "identifier", foreground: "1b1f27" }
-      ],
-      colors: {
-        "editor.background": "#f4f5f8",
-        "editor.foreground": "#1b1f27",
-        "editor.lineHighlightBackground": "#e9ebf0",
-        "editorLineNumber.foreground": "#9aa1b1",
-        "editorGutter.background": "#f4f5f8",
-        "editor.selectionBackground": "#c7d2fe",
-        "editorIndentGuide.background": "#dfe2e8",
-        "scrollbarSlider.background": "#dcdfe6b0"
-      }
-    })
-    loaded = monaco
-    return monaco
-  })()
-  return monacoPromise
+// Light counterpart; background = the light `codeBg` token (src/styles/themes.stylex.ts).
+const lightHighlight = HighlightStyle.define([
+  { tag: [tags.keyword, tags.modifier, tags.operatorKeyword, tags.controlKeyword, tags.definitionKeyword, tags.moduleKeyword], color: "#7c3aed" },
+  { tag: [tags.string, tags.special(tags.string), tags.regexp], color: "#15803d" },
+  { tag: [tags.comment, tags.lineComment, tags.blockComment], color: "#6b7280", fontStyle: "italic" },
+  { tag: [tags.number, tags.integer, tags.float, tags.bool, tags.null, tags.atom], color: "#b45309" },
+  { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: "#1d4ed8" },
+  { tag: [tags.typeName, tags.className, tags.namespace], color: "#0e7490" }
+])
+const lightTheme = [
+  EditorView.theme({
+    "&": { backgroundColor: "#f4f5f8", color: "#1b1f27" },
+    ".cm-content": { caretColor: "#1b1f27" },
+    ".cm-cursor, .cm-dropCursor": { borderLeftColor: "#1b1f27" },
+    "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground, ::selection": { backgroundColor: "#c7d2fe" },
+    ".cm-gutters": { backgroundColor: "#f4f5f8", color: "#9aa1b1" },
+    ".cm-activeLine": { backgroundColor: "#e9ebf0" },
+    ".cm-activeLineGutter": { backgroundColor: "#e9ebf0" },
+    ".cm-matchingBracket": { backgroundColor: "#dbe4ff", outline: "1px solid #b4c2ff" },
+    ".cm-selectionMatch": { backgroundColor: "#e0e7ff" }
+  }, { dark: false }),
+  syntaxHighlighting(lightHighlight)
+]
+const themeFor = (t: EditorTheme) => (t === "light" ? lightTheme : darkTheme)
+
+/** Switches every editor on the page. */
+export function setEditorTheme(theme: EditorTheme): void {
+  currentTheme = theme
+  for (const { view, theme: compartment } of editors) view.dispatch({ effects: compartment.reconfigure(themeFor(theme)) })
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener(THEME_EVENT, (e) => setEditorTheme((e as CustomEvent<string>).detail === "light" ? "light" : "dark"))
+}
+
+/** Our diagnostics are 1-based line/col; CodeMirror wants document offsets, clamped to the doc. */
+function toLintDiagnostics(state: EditorState, diagnostics: Array<Diagnostic>): Array<LintDiagnostic> {
+  const doc = state.doc
+  const offset = (line: number, col: number) => {
+    const l = doc.line(Math.min(Math.max(line, 1), doc.lines))
+    return Math.min(l.from + Math.max(col - 1, 0), l.to)
+  }
+  return diagnostics.map((d) => {
+    const from = offset(d.line, d.col)
+    const to = Math.max(from, offset(d.endLine, d.endCol))
+    return { from, to, severity: "error", message: d.message }
+  })
 }
 
 export async function createEditor(container: HTMLElement, options: {
@@ -105,64 +115,53 @@ export async function createEditor(container: HTMLElement, options: {
   onRun?: () => void          // bound to Cmd/Ctrl+Enter
   readOnly?: boolean
 }): Promise<EditorHandle> {
-  const monaco = await loadMonaco()
-  const model = monaco.editor.createModel(options.code, "typescript", monaco.Uri.parse(`inmemory://playground/${++counter}.ts`))
-  if (typeof document !== "undefined" && document.fonts?.ready) {
-    void document.fonts.ready.then(() => monaco.editor.remeasureFonts())
-  }
-  const editor = monaco.editor.create(container, {
-    model,
-    theme: themeName(currentTheme),
-    fontSize: 13,
-    // Monaco's default stack: Safari mis-measures some `ui-monospace` faces, which puts the caret
-    // in the wrong column on click. Menlo/Monaco are measured correctly in every browser.
-    fontFamily: "Menlo, Monaco, 'Courier New', monospace",
-    fontLigatures: false,
-    minimap: { enabled: false },
-    automaticLayout: true,
-    readOnly: options.readOnly ?? false,
-    scrollBeyondLastLine: false,
-    smoothScrolling: true,
-    tabSize: 2,
-    lineNumbersMinChars: 3,
-    renderLineHighlight: "line",
-    padding: { top: 8, bottom: 8 },
-    // Let the wheel reach the page once the editor is scrolled to its start/end.
-    scrollbar: { alwaysConsumeMouseWheel: false, vertical: "auto", horizontal: "auto" }
-  })
-  if (options.onRun) {
-    const onRun = options.onRun
-    editor.addAction({
-      id: "playground.run",
-      label: "Run",
-      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
-      run: () => onRun()
-    })
-  }
+  const theme = new Compartment()
+  const changeListeners: Array<(code: string) => void> = []
+  const onRun = options.onRun
+  const extensions = [
+    // Mod-Enter must win over every other binding (e.g. insertNewline / closeBrackets).
+    onRun ? Prec.highest(keymap.of([{ key: "Mod-Enter", run: () => { onRun(); return true } }])) : [],
+    lineNumbers(),
+    highlightActiveLineGutter(),
+    highlightSpecialChars(),
+    history(),
+    drawSelection(),
+    EditorState.allowMultipleSelections.of(true),
+    indentOnInput(),
+    bracketMatching(),
+    closeBrackets(),
+    rectangularSelection(),
+    crosshairCursor(),
+    highlightActiveLine(),
+    highlightSelectionMatches(),
+    keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...historyKeymap, indentWithTab]),
+    EditorState.tabSize.of(2),
+    indentUnit.of("  "),
+    javascript({ typescript: true }),
+    lintGutter(),
+    baseTheme,
+    theme.of(themeFor(currentTheme)),
+    EditorView.updateListener.of((update) => {
+      if (update.docChanged) {
+        const code = update.state.doc.toString()
+        for (const cb of changeListeners) cb(code)
+      }
+    }),
+    options.readOnly ? [EditorState.readOnly.of(true), EditorView.editable.of(false)] : []
+  ]
+  const view = new EditorView({ state: EditorState.create({ doc: options.code, extensions }), parent: container })
+  const entry = { view, theme }
+  editors.add(entry)
   return {
-    getValue: () => model.getValue(),
-    setValue: (code) => model.setValue(code),
-    setDiagnostics: (diagnostics) =>
-      monaco.editor.setModelMarkers(
-        model,
-        "typecheck",
-        diagnostics.map((d) => ({
-          severity: monaco.MarkerSeverity.Error,
-          message: d.message,
-          startLineNumber: d.line,
-          startColumn: d.col,
-          endLineNumber: d.endLine,
-          endColumn: d.endCol
-        }))
-      ),
-    onChange: (cb) => {
-      model.onDidChangeContent(() => cb(model.getValue()))
-    },
-    focus: () => editor.focus(),
-    layout: () => editor.layout(),
+    getValue: () => view.state.doc.toString(),
+    setValue: (code) => view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: code } }),
+    setDiagnostics: (diagnostics) => view.dispatch(setLintDiagnostics(view.state, toLintDiagnostics(view.state, diagnostics))),
+    onChange: (cb) => { changeListeners.push(cb) },
+    focus: () => view.focus(),
+    layout: () => {},   // CodeMirror sizes itself from the DOM; the resizable box drives the height.
     dispose: () => {
-      editor.dispose()
-      model.dispose()
+      editors.delete(entry)
+      view.destroy()
     }
   }
 }

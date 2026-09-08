@@ -1,5 +1,5 @@
 /**
- * UI-owned STUB of Interface 3 (src/runtime/editor.ts): a <textarea> instead of Monaco.
+ * UI-owned STUB of Interface 3 (src/runtime/editor.ts): a <textarea> instead of CodeMirror.
  */
 import * as stylex from "@stylexjs/stylex"
 import type { Diagnostic } from "./client.stub"

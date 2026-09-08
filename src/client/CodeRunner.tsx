@@ -2,7 +2,7 @@
  * The interactive playground widget (React island, hydrated with client:visible).
  * Editor + Run / Run & check / Reset / Hint / Show solution / Load solution, output panel,
  * pass/fail against the expected output, drafts, remembered height and completion (progress.ts).
- * The runtime bridge is imported lazily so server rendering never loads Monaco.
+ * The runtime bridge is imported lazily so server rendering never loads the editor (CodeMirror).
  */
 import { useCallback, useEffect, useRef, useState } from "react"
 import * as stylex from "@stylexjs/stylex"
@@ -36,7 +36,7 @@ export default function CodeRunner(props: CodeRunnerProps) {
   const editorPromise = useRef<Promise<EditorHandle> | null>(null)
   const [editorReady, setEditorReady] = useState(false)
   const [phase, setPhase] = useState<"idle" | "loading" | "running">("idle")
-  // Refs so callbacks captured once (Monaco's onRun, the editor promise) always see the latest state.
+  // Refs so callbacks captured once (the editor's onRun, the editor promise) always see the latest state.
   const busyRef = useRef(false)
   const runRef = useRef<() => Promise<void>>(async () => {})
   const [result, setResult] = useState<FullResult | null>(null)
@@ -64,8 +64,8 @@ export default function CodeRunner(props: CodeRunnerProps) {
     return promise
   }, [id, code])
 
-  // Mount the editor, restore the remembered height, and persist resizes. Monaco relayouts itself
-  // (automaticLayout), so this only stores the height: coalesced to one frame and skipped when it
+  // Mount the editor, restore the remembered height, and persist resizes. CodeMirror is sized by the
+  // DOM (height: 100% of the box), so this only stores the height: coalesced to one frame and skipped when it
   // did not really change, so a resize never feeds back into another resize.
   useEffect(() => {
     const box = boxRef.current!

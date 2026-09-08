@@ -24,7 +24,7 @@ src/
     types.ts                 Diagnostic, RunResult, FullResult (shapes below)
     format.ts                console formatting shared by browser worker and Node verifier
     client.ts                getRunner(): Runner  (lazy singleton, spins up workers)
-    editor.ts                createEditor(): Monaco editor factory used by the UI
+    editor.ts                createEditor(): CodeMirror 6 editor factory used by the UI
     typecheck.*              TypeScript checking against bundled Effect types (worker)
     exec.worker.ts           runs transpiled learner code with the console shim, posts output
   client/
@@ -105,13 +105,20 @@ export function createEditor(container: HTMLElement, options: {
   readOnly?: boolean
 }): Promise<EditorHandle>
 ```
-Monaco is loaded from the `monaco-editor` npm package through Vite (no CDN). Two editor themes,
-dark (background `#0b0d12`) and light (`#f4f5f8`), follow the site theme (`html[data-theme]`, StyleX
-`createTheme` in `src/styles/themes.stylex.ts`, toggle in `src/client/theme.ts`). Font size 13, no minimap,
-`automaticLayout: true`, `alwaysConsumeMouseWheel: false` so the page scrolls past an editor at its end. The editor shows
-TypeScript syntax highlighting. Semantic diagnostics come from `setDiagnostics` (the runtime),
-not from Monaco's own worker, unless the Runtime owner decides Monaco's TS worker with
-`addExtraLib` IS the type checker; either way the UI only calls `setDiagnostics`.
+The editor is CodeMirror 6 (`codemirror` + `@codemirror/*` npm packages, bundled by Vite, no CDN).
+CodeMirror renders the document as real text in a contenteditable, so clicks place the caret with
+the browser's native hit-testing (Monaco's font-measurement based hit-testing put the caret in the
+wrong column with some fonts, extensions and zoom levels). Two editor themes, kept in a
+`Compartment` so `setEditorTheme` reconfigures live: dark is `@codemirror/theme-one-dark` with the
+site's `codeBg` background (`#0b0d12`); light is a custom `EditorView.theme` + `HighlightStyle`
+(`#f4f5f8` background). Both follow the site theme (`html[data-theme]`, StyleX `createTheme` in
+`src/styles/themes.stylex.ts`, toggle in `src/client/theme.ts`, `effect-playground:theme` event).
+Font 13px Menlo/Monaco, tab size 2, no line wrapping; `.cm-editor` fills its container
+(`height: 100%`) so the resizable box drives the editor height, and `layout()` is a no-op. The
+scroller lets the wheel through to the page at its start/end. TypeScript syntax highlighting comes
+from `@codemirror/lang-javascript`. Semantic diagnostics come from `setDiagnostics` (the runtime),
+shown as `@codemirror/lint` marks (squiggles + gutter markers); the editor runs no type checker of
+its own.
 
 ## Interface 4: console output format (`src/runtime/format.ts`)
 
@@ -167,8 +174,8 @@ wired in `astro.config.mjs`). No hand-written `.css` files except a tiny reset. 
 - Component styles in `src/styles/<name>.stylex.ts` with `stylex.create`; apply in `.astro`
   templates and in custom-element code with `stylex.props(styles.x, cond && styles.y)`, spreading
   the returned `{ className, style }`.
-- Monaco's own CSS (`monaco-editor/min/vs/editor/editor.main.css` or the ESM equivalent) is the one
-  third-party stylesheet and is imported by `src/runtime/editor.ts`.
+- CodeMirror injects its own styles at runtime (`EditorView.theme` / the one-dark theme, defined
+  in `src/runtime/editor.ts`); it is the one non-StyleX styling and ships no stylesheet file.
 - In dev, the layout must include the StyleX dev CSS link and runtime shim documented by the
   unplugin README (`/virtual:stylex.css` when `import.meta.env.DEV`); in production the plugin emits
   a CSS asset that Astro links automatically.

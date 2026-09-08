@@ -14,8 +14,6 @@ export default defineConfig({
       // StyleX: compile-time atomic CSS. Styles live in src/styles/*.stylex.ts and in
       // client modules via stylex.create(); apply with stylex.props().
       stylex.vite({ devMode: "css-only" })
-    ],
-    // monaco-editor is large; keep it out of dependency pre-bundling
-    optimizeDeps: { exclude: ["monaco-editor"] }
+    ]
   }
 })
